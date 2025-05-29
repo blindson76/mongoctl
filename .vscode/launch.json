@@ -13,7 +13,9 @@
                 "DB_PATH":"${workspaceFolder}/data/mongo/t",
                 "CSB_IP":"localhost",
                 "MONGO_PORT":"27017",
-                "PATH":"${workspaceFolder}/cots/mongo"
+                "PATH":"${workspaceFolder}/cots/mongo",
+                "CONSOLE_ID":"1",
+                "NOMAD_ADDR":"http://10.10.11.1:4146"
             }
         },
         {

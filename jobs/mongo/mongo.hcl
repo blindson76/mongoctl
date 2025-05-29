@@ -1,37 +1,33 @@
-job "mongo-job" {
+job "mongo-service-job" {
 
-  type = "sysbatch"
+  type = "system"
   datacenters = ["*"]
 
-  group "mongo-group" {
+  group "mongo-service-group" {
 
+    ephemeral_disk {
+      migrate = true
+      size    = 500
+      sticky  = true
+    }
     service {
-      provider = "mongo"
+      provider = "nomad"
     }
 
-    task "mongo-prestart" {
+    task "mongo-service-task" {
 
-      lifecycle {
-        hook = "prestart"
-        sidecar = false
-      }
       
       driver = "java"
       config {
-          class = "com.example.MongoPrestart"
-          class_path    = "C:\\Users\\ubozkurt\\Downloads\\nomad_1.9.4_windows_amd64\\demo\\target\\demo-1.0-SNAPSHOT.jar"
+          class = "com.example.MongoService"
+          class_path    = "C:\\Users\\ubozkurt\\Downloads\\nomad_1.9.4_windows_amd64\\demo\\target\\demo-1.0-SNAPSHOT.jar;C:\\Users\\ubozkurt\\Downloads\\nomad_1.9.4_windows_amd64\\demo\\target\\lib\\*"
+      }
+      template {
+        data = "mongosecret"
+        destination = "${NOMAD_ALLOC_DIR}/keyfile"
       }
 
     }
 
-    task "mongo" {
-
-      driver = "java"
-
-      config {
-        class = "com.example.Mongo"
-        class_path    = "C:\\Users\\ubozkurt\\Downloads\\nomad_1.9.4_windows_amd64\\demo\\target\\demo-1.0-SNAPSHOT.jar"
-      }
-    }
   }
 }
