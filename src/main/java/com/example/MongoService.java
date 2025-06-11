@@ -8,16 +8,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import com.google.gson.Gson;
-import com.mongodb.MongoClientSettings;
-import com.mongodb.MongoCredential;
-import com.mongodb.MongoException;
-import com.mongodb.ServerAddress;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.slf4j.Logger;
@@ -26,6 +20,11 @@ import org.zeroturnaround.exec.ProcessExecutor;
 import org.zeroturnaround.exec.ProcessResult;
 import org.zeroturnaround.exec.StartedProcess;
 
+import com.google.gson.Gson;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCredential;
+import com.mongodb.MongoException;
+import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.result.DeleteResult;
@@ -88,6 +87,7 @@ public class MongoService {
     }
 
     private static void updateRole(MongoRole mongoRole) {
+        logger.info("received new role {}", mongoRole);
         if(mongoRole == null && lastRole != null){
             //kill mongo
             logger.info("killing mongo process");
@@ -122,7 +122,7 @@ public class MongoService {
         try{
 
             logger.info("Initiating mongod instance as {} with dbPath={} host={} port={} replSet={} keyFile={}", mongoRole.role, DB_PATH, ADDR, PORT, RSNAME,
-                    Path.of(System.getenv("NOMAD_TASK_DIR"),"keyfile").toAbsolutePath().toString());
+                    Path.of(System.getenv("NOMAD_ALLOC_DIR"),"keyfile").toAbsolutePath().toString());
 
             mongoProc = new ProcessExecutor()
                     .command("mongod.exe"
@@ -131,7 +131,7 @@ public class MongoService {
                             ,"--port", PORT
                             ,"--replSet", RSNAME
                             ,"--auth"
-                            ,"--keyFile", Path.of(System.getenv("NOMAD_TASK_DIR"),"keyfile").toAbsolutePath().toString()
+                            ,"--keyFile", Path.of(System.getenv("NOMAD_ALLOC_DIR"),"keyfile").toAbsolutePath().toString()
                     )
                     .destroyOnExit()
                     .redirectOutput(System.out)
@@ -318,6 +318,11 @@ public class MongoService {
     private static class MongoRole {
         String role;
         String members;
+        
+        @Override
+        public String toString(){
+            return String.format("role:%s members:%s", role, members);
+        }
     }
     private static class MongoRoleVar extends MongoControl.VariablePath{
         MongoRole Items;

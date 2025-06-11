@@ -4,7 +4,7 @@ job "mongo-member-job" {
   datacenters = ["*"]
 
   group "mongo-member-group" {
-    count = 3
+    count = 0
     service {
       provider = "nomad"
     }

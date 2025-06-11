@@ -15,7 +15,7 @@ set MONGO_ADDR=%CSB_IP%
 set RS_NAME=rs0
 
 rmdir /S /Q %DATA_DIR%
-rmdir /S /Q %DB_PATH%
+@rem rmdir /S /Q %DB_PATH%
 mkdir %DATA_DIR%%
 mkdir data\mongo\%CONSOLE_ID%
 node wait.js 5
@@ -23,4 +23,4 @@ start "nomad-%CONSOLE_ID%" /min cmd /C nomad agent -config nomad-%CONSOLE_ID%.hc
 node wait_nomad.js %NOMAD_ADDR%
 set SHELL=cmd.exe
 nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy /c nomad job run jobs\mongo\mongo.hcl 
-@REM nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy /c nomad job run jobs\mongo\mongo-member.hcl
+nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy2 /c nomad job run jobs\mongo\mongo-member.hcl

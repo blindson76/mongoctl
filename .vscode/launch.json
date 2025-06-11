@@ -17,13 +17,6 @@
                 "CONSOLE_ID":"1",
                 "NOMAD_ADDR":"http://10.10.11.1:4146"
             }
-        },
-        {
-            "type": "java",
-            "name": "Main",
-            "request": "launch",
-            "mainClass": "com.example.Main",
-            "projectName": "demo"
         }
     ]
 }
