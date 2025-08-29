@@ -1,5 +1,11 @@
 package com.example;
 
+import com.google.gson.Gson;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.zeroturnaround.exec.ProcessExecutor;
+import org.zeroturnaround.exec.ProcessResult;
+
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -16,20 +22,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import static java.util.stream.Collectors.toList;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.zeroturnaround.exec.ProcessExecutor;
-import org.zeroturnaround.exec.ProcessResult;
-
-import com.google.gson.Gson;
-
-public class MongoControl {
-    static Logger logger = LoggerFactory.getLogger(MongoControl.class);
+public class MongoWatcher {
+    static Logger logger = LoggerFactory.getLogger(MongoWatcher.class);
 
     static final String NOMAD_ADDR = System.getenv("NOMAD_ADDR");
     private static Map<String, Variable> allMembers = new HashMap<>();
@@ -37,16 +32,51 @@ public class MongoControl {
     private static ScheduledFuture<?> configurer;
 
     public static void main(String[] args) {
-        NomadWatch watch = new NomadWatch("vars","prefix=status/mongo" );
+        NomadWatch watch = new NomadWatch("allocations");
         for (; ; ) {
             try {
-                List<JsonObject> vars = watch.watchList().asList().stream()
-                        .map(JsonElement::getAsJsonObject)
-//                        .filter(e->e.getAsJsonObject("TaskStates").has("mongo-node-task"))
-//                        .filter(e->e.getAsJsonObject("TaskStates").getAsJsonObject("mongo-node-task").get("State").getAsString().equals("running"))
+                Allocation[] vars = watch.watch(Allocation[].class);
+                HttpClient client = HttpClient.newHttpClient();
+                Gson gson = new Gson();
+                List<CompletableFuture<MongoStatusVar>> requests = Arrays.asList(vars).stream()
+//                        .filter(v -> v.Path.matches("mongo/.*?/ts"))
+                        .map(var -> {
+                            try {
+                                return new URI(String.format("%s/v1/var/%s", NOMAD_ADDR, var.JobID)); // TODO Auto-generated catch block
+                            } catch (URISyntaxException ex) {
+                                return null;
+                            }
+                        })
+                        .map(HttpRequest::newBuilder)
+                        .map(reqBuilder -> reqBuilder.build())
+                        .map(req -> client.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(res -> res.body()))
+                        .map(str -> str.thenApply(json -> gson.fromJson(json, MongoStatusVar.class)))
                         .toList();
-                logger.info("{}", vars);
-            } catch (Exception ex) {
+                logger.info("reqs {}", requests);
+
+                CompletableFuture.allOf(requests.toArray(CompletableFuture[]::new))
+                        .whenComplete((o, throwable) -> {
+                            List<MongoStatusVar> nodes = requests.stream()
+                                    .filter(CompletableFuture::isDone)
+                                    .map(r -> {
+                                        try {
+                                            return r.get();
+                                        } catch (Exception e) {
+                                            return null;
+                                        }
+                                    })
+                                    .sorted((a, b) -> {
+                                        if (a.Items.opLogSec == b.Items.opLogSec) {
+                                            return a.Items.opLogInc - b.Items.opLogInc;
+                                        }
+                                        return a.Items.opLogSec - b.Items.opLogSec;
+                                    })
+                                    .toList();
+                            logger.info(nodes.toString());
+//                            updateMembers(nodes);
+//                            configureCluster(nodes);
+                        });
+            } catch (IOException | URISyntaxException ex) {
                 ex.printStackTrace();
             }
         }
@@ -210,6 +240,12 @@ public class MongoControl {
         int inc;
         int second;
         String host;
+    }
+    protected static class Allocation {
+        String Name;
+        String JobID;
+        String NodeName;
+        String TaskGroup;
     }
 
 }

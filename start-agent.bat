@@ -1,26 +1,43 @@
 @echo off
 set CONSOLE_ID=%1
 set NODE_ID=node-%CONSOLE_ID%
-set CSB_IP=10.10.11.1
+set CSB_IP=10.10.5%CONSOLE_ID%.1
 title Node-%CONSOLE_ID%
 echo this is %CONSOLE_ID%
 set PATH=%~dp0;%PATH%
 set PATH=%~dp0cots\mongo;%PATH%
 setlocal EnableDelayedExpansion
-set DATA_DIR=%~dp0data\nomad\%CONSOLE_ID%
-set DB_PATH=%~dp0data\mongo\%CONSOLE_ID%
-set NOMAD_ADDR=http://%CSB_IP%:4%CONSOLE_ID%46
-set MONGO_PORT=2701%CONSOLE_ID%
+set NOMAD_DATA_DIR=%~dp0data\nomad\%CONSOLE_ID%
+set MONGO_DB_PATH=%~dp0data\mongo\%CONSOLE_ID%
+set CONSUL_DATA_DIR=%~dp0data\consul\%CONSOLE_ID%
+set NOMAD_ADDR=http://%CSB_IP%:4646
+set CONSUL_HTTP_ADDR=http://%CSB_IP%:8500
+set MONGO_PORT=27017
 set MONGO_ADDR=%CSB_IP%
-set RS_NAME=rs0
+set MONGO_LOCAL_ADDR=%CSB_IP%
 
-rmdir /S /Q %DATA_DIR%
-@rem rmdir /S /Q %DB_PATH%
-mkdir %DATA_DIR%%
+set RS_NAME=rs0
+set CLASSPATH=%~dp0\target\*;%~dp0\target\lib\*;
+rmdir /S /Q %NOMAD_DATA_DIR%
+rmdir /S /Q %CONSUL_DATA_DIR%
+rem rmdir /S /Q %MONGO_DB_PATH%
+mkdir %NOMAD_DATA_DIR%
 mkdir data\mongo\%CONSOLE_ID%
-node wait.js 5
-start "nomad-%CONSOLE_ID%" /min cmd /C nomad agent -config nomad-%CONSOLE_ID%.hcl -data-dir %DATA_DIR% -node %NODE_ID% -bootstrap-expect 3 -retry-join 10.10.11.1:4148 -retry-join 10.10.11.1:4248 -retry-join 10.10.11.1:4348 -retry-join 10.10.11.1:4448 -retry-join 10.10.11.1:4548 -retry-join 10.10.11.1:4648
+rem node wait.js 1
+echo starting consul
+start "consul-%CONSOLE_ID%" /min cmd /C consul agent -server -ui -config-file consul.hcl -data-dir %CONSUL_DATA_DIR% -node %NODE_ID% -client %CSB_IP% -bind %CSB_IP% -bootstrap-expect 3 -retry-join 10.10.51.1  -retry-join 10.10.52.1  -retry-join 10.10.53.1  -retry-join 10.10.54.1  -retry-join 10.10.55.1  -retry-join 10.10.56.1
+start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config client.hcl -config client.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface loop -node %NODE_ID% -bootstrap-expect 3 -retry-join 10.10.51.1:4648 -retry-join 10.10.52.1:4648 -retry-join 10.10.53.1:4648 -retry-join 10.10.54.1:4648 -retry-join 10.10.55.1:4648 -retry-join 10.10.56.1:4648
 node wait_nomad.js %NOMAD_ADDR%
+go run -C goctl . -prestart
+pause
+echo nomad ready
+goto exit
+nomad node meta apply -unset role.mongo
+nomad var purge status/mongo/%NODE_ID%
+java com.example.MongoPrestart
+:exit
+echo done
+rem pause
 set SHELL=cmd.exe
-nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy /c nomad job run jobs\mongo\mongo.hcl 
-nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy2 /c nomad job run jobs\mongo\mongo-member.hcl
+@REM nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy /c nomad job run jobs\mongo\mongo.hcl
+@REM nomad var lock -verbose -ttl=10s -max-retry=1 job/deploy2 /c nomad job run jobs\mongo\mongo-member.hcl

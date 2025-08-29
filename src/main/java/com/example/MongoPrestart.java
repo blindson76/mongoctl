@@ -1,11 +1,14 @@
 package com.example;
 
+import java.util.Collections;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeroturnaround.exec.ProcessExecutor;
@@ -27,7 +30,7 @@ public class MongoPrestart {
     static final String RSNAME = System.getenv("RS_NAME");
     static final String NODE_ID = System.getenv("NODE_ID");
     static final String NOMAD_ADDR = System.getenv("NOMAD_ADDR");
-    
+
 
     public static void main(String[] args) throws Exception {
         logger.info(String.format("Host:%s Port:%s DbPath:%s", "localhost", PORT, DB_PATH));
@@ -43,15 +46,15 @@ public class MongoPrestart {
             .redirectError(System.err)
             // .redirectInput(System.in)
             .start();
+//        proc.getFuture().get();
         MongoClient cli = MongoClients.create(String.format("mongodb://localhost:%s/", PORT));
-        BsonTimestamp ts = getOpLog(cli);
-        logger.info(ts.toString());
-        boolean deleted = deleteRSConfig(cli, RSNAME);
-        if (deleted){
-            logger.info("Replicaset config has been deleted succesfully");
-        } else {
-            logger.error("Replicaset config couldn't deleted");
-            System.exit(-1);
+        createUser(cli);
+        MongoMemberStatus memberStatus = getMemberStatus(cli);
+        if (memberStatus != null){
+            boolean success = setMemberStatus(memberStatus);
+            if (success){
+                logger.info("mongo member status updated successfully");
+            }
         }
         
         try {
@@ -62,7 +65,6 @@ public class MongoPrestart {
         Future<ProcessResult> future = proc.getFuture();
         try {            
             int mongoExists = future.get(1, TimeUnit.MINUTES).getExitValue();
-            setMemberStatus(ts);
             System.exit(mongoExists);
         } catch (TimeoutException e) {
             logger.warn("mongodb hasn't exits in time");
@@ -76,7 +78,56 @@ public class MongoPrestart {
         }
 
     }
-    
+    private static void createUser(MongoClient cli) {
+        try{
+            logger.info("checking adminUser existence");
+            Document user = cli.getDatabase("admin").runCommand(new Document("usersInfo",
+                    new Document("user", "adminUser").append("db","admin")));
+            boolean exists = user.containsKey("users") && user.getList("users", Document.class).iterator().hasNext();
+            if (exists){
+                logger.info("adminUser already exist");
+            }else{
+                logger.info("creating adminUser");
+                Document newUser = new Document("createUser", "adminUser")
+                        .append("pwd","123")
+                        .append("roles", Collections.singletonList(
+                                new Document("role", "root")
+                                        .append("db","admin")
+                        ));
+                Document createResult = cli.getDatabase("admin").runCommand(newUser);
+                logger.info("adminUser created successfully {}", createResult);
+            }
+        }catch(Exception e){
+            logger.error("adminUser create error {}", e);
+
+        }
+    }
+    private static MongoMemberStatus getMemberStatus(MongoClient cli) {
+        MongoMemberStatus memberStatus = new MongoMemberStatus();
+        memberStatus.nodeId = NODE_ID;
+        try{
+
+            Document rsConfig = cli.getDatabase("local").getCollection("system.replset").find(new Document("_id",RSNAME)).first();
+            String members = rsConfig.getList("members", Document.class).stream()
+                    .map(member->member.getString("host"))
+                    .collect(Collectors.joining(","));
+            String replSetId = rsConfig.get("settings", Document.class).get("replicaSetId", ObjectId.class).toString();
+            int term = rsConfig.getInteger("term");
+            BsonTimestamp oplogTs = getOpLog(cli);
+
+            memberStatus.members = members;
+            memberStatus.opLogSec = oplogTs.getTime();
+            memberStatus.opLogInc = oplogTs.getInc();
+            memberStatus.term = term;
+            memberStatus.replSetId = replSetId;
+            return memberStatus;
+        }catch (Exception e){
+            System.err.println(e);
+
+        }
+        return memberStatus;
+    }
+
     private static boolean  deleteRSConfig(MongoClient cli, String rs) {
         Document replSet = cli.getDatabase("local").getCollection("system.replset").find(new Document("_id", rs)).first();
         if (replSet == null){
@@ -99,38 +150,28 @@ public class MongoPrestart {
         BsonTimestamp ts = tsDoc.get("ts", BsonTimestamp.class);
         return ts;
     }
-    private static boolean setMemberStatus(BsonTimestamp ts){
+    private static boolean setMemberStatus(MongoMemberStatus memberStatus){
         try{
-            ProcessResult processResult = new ProcessExecutor()
-            .command("nomad.exe"
-                ,"var"
-                ,"purge"
-                ,String.format("mongo/%s/ts", NODE_ID)
-            )
-            .environment("NOMAD_ADDR", NOMAD_ADDR)
-            .readOutput(true)
-            .timeout(5, TimeUnit.SECONDS)
-            .destroyOnExit()
-            .execute();
-            logger.info(processResult.outputUTF8());
 
-            processResult = new ProcessExecutor()
-            .command("nomad.exe"
-                ,"var"
-                ,"put"
-                ,"-force"
-                ,String.format("mongo/%s/ts", NODE_ID)
-                ,String.format("second=%d", ts.getTime())
-                ,String.format("inc=%d", ts.getInc())
-                ,String.format("host=%s:%s", CSB_IP, PORT)
-            )
-            .environment("NOMAD_ADDR", NOMAD_ADDR)
-            .timeout(5, TimeUnit.SECONDS)
-            .readOutput(true)
-            .destroyOnExit()
-            .execute();
-            logger.info(processResult.outputString());
-            logger.info("nomad exit with: "+processResult.getExitValue());
+            ProcessResult processResult = new ProcessExecutor()
+                    .command("nomad.exe"
+                            , "var"
+                            , "put"
+                            , "-force"
+                            , String.format("status/mongo/%s", NODE_ID)
+                            , String.format("nodeId=%s", memberStatus.nodeId)
+                            , String.format("replSetId=%s", memberStatus.replSetId)
+                            , String.format("members=%s", memberStatus.members)
+                            , String.format("term=%d", memberStatus.term)
+                            , String.format("oplogSec=%d", memberStatus.opLogSec)
+                            , String.format("oplogInc=%d", memberStatus.opLogInc)
+                    )
+//                    .environment("NOMAD_ADDR", NOMAD_ADDR)
+                    .readOutput(true)
+                    .timeout(5, TimeUnit.SECONDS)
+                    .destroyOnExit()
+                    .execute();
+            logger.info(processResult.outputUTF8());
             return processResult.getExitValue() == 0;
         }catch(Exception e){
             logger.error(e.toString());
@@ -138,5 +179,18 @@ public class MongoPrestart {
         }
         return false;
 
+    }
+    public static class MongoMemberStatus {
+        String nodeId;
+        String replSetId;
+        int term;
+        int opLogSec;
+        int opLogInc;
+        String members;
+
+        @Override
+        public String toString(){
+            return String.format("NodeId=%s replSetId=%s term=%s opLogSec=%d opLogInc=%d members=%s", nodeId, replSetId, term, opLogSec, opLogInc, members);
+        }
     }
 }

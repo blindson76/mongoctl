@@ -1,16 +1,13 @@
 package com.example;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.URI;
 import java.net.URLConnection;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 
 import org.bson.BsonTimestamp;
 import org.bson.Document;
@@ -19,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.zeroturnaround.exec.ProcessExecutor;
 import org.zeroturnaround.exec.ProcessResult;
 import org.zeroturnaround.exec.StartedProcess;
+import org.zeroturnaround.exec.listener.ProcessListener;
 
 import com.google.gson.Gson;
 import com.mongodb.MongoClientSettings;
@@ -27,7 +25,6 @@ import com.mongodb.MongoException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
-import com.mongodb.client.result.DeleteResult;
 
 public class MongoService {
     static Logger logger = LoggerFactory.getLogger(MongoService.class);
@@ -44,6 +41,7 @@ public class MongoService {
     private static MongoRole lastRole;
     private static MongoClient cli;
     private static StartedProcess mongoProc;
+    private static ScheduledFuture<?> oplogMonitor;
 
 
     public static void main(String[] args) throws Exception {
@@ -135,23 +133,74 @@ public class MongoService {
                     )
                     .destroyOnExit()
                     .redirectOutput(System.out)
-                    .redirectError(System.err)
+                    .redirectError(System.out)
+                    .listener(new ProcessListener(){
+                        @Override
+                        public void afterStop(Process process) {
+                            System.err.println("finish");
+                            // do nothing
+                          }
+                    })
                     .start();
             cli = MongoClients.create(
                     MongoClientSettings.builder()
                             .credential(MongoCredential.createCredential("adminUser","admin","123".toCharArray()))
                             .applyToClusterSettings(builder->
                                     builder.hosts(Collections.singletonList(new ServerAddress(ADDR, Integer.parseInt(PORT))))
+                                            .serverSelectionTimeout(3, TimeUnit.SECONDS)
                             )
                             .build()
             );
+
+            oplogMonitor = Executors.newSingleThreadScheduledExecutor()
+                    .scheduleAtFixedRate(()->{
+                        try{
+
+                            MongoClient cli = MongoClients.create(
+                                    MongoClientSettings.builder()
+                                            .credential(MongoCredential.createCredential("adminUser","admin","123".toCharArray()))
+                                            .applyToClusterSettings(builder->
+                                                    builder.hosts(Collections.singletonList(new ServerAddress(ADDR, Integer.parseInt(PORT))))
+                                                            .serverSelectionTimeout(3, TimeUnit.SECONDS)
+                                            )
+                                            .build()
+                            );
+                            logger.info("Checking oplogs");
+                            Document tsDoc = cli.getDatabase("admin").runCommand(new Document("replSetGetStatus",1));
+                            BsonTimestamp ts = ((Document)tsDoc.get("optimes")).get("lastCommittedOpTime", BsonTimestamp.class);
+                            logger.info("Oplog result: {}", ts);
+                            File oplogFile = Path.of(DB_PATH,"oplog.txt").toFile();
+                            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(oplogFile)));
+                            writer.write(String.format("%d:%d\n", ts.getTime(), ts.getInc()));
+                            writer.flush();
+                            writer.close();
+
+                        }catch (MongoException e){
+                            logger.warn("Oplog fetch error: {}", e.getMessage());
+
+                        } catch (FileNotFoundException e) {
+                            logger.warn("Oplog write error: {}", e.getMessage());
+                        } catch (IOException e) {
+                            logger.warn("Oplog write ioerror: {}", e.getMessage());
+                        }
+                        logger.info("Finish oplog checking");
+
+                    },15,5,TimeUnit.SECONDS);
             if(mongoRole.role.equals("primary")){
                 logger.info("Checking replication");
                 checkReplication(mongoRole);
+            }else{
+                logger.info("this is secondary node. replciation check skipped");
             }
         }catch (Exception e){
 
         }
+        try {
+            oplogMonitor.get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        }
+        logger.info("oplogmonitor finished");
     }
 
     private static void checkReplication(MongoRole role) {
@@ -191,10 +240,15 @@ public class MongoService {
 //                .redirectError(System.err)
                 // .redirectInput(System.in)
                 .start();
+        File DBPath = Path.of(DB_PATH).toFile();
+        if (!DBPath.exists()){
+            DBPath.mkdir();
+        }
         MongoClient cli = MongoClients.create(String.format("mongodb://localhost:%s/", PORT));
-        createUser(cli);
         BsonTimestamp ts = getOpLog(cli);
-        boolean deleted = deleteRSConfig(cli, RSNAME);
+        boolean deleted = true;
+                deleteRSConfig(cli, RSNAME);
+        createUser(cli);
         if (deleted){
             logger.info("Replicaset config has been deleted succesfully");
         } else {
@@ -250,16 +304,35 @@ public class MongoService {
     }
 
     private static boolean  deleteRSConfig(MongoClient cli, String rs) {
-        Document replSet = cli.getDatabase("local").getCollection("system.replset").find(new Document("_id", rs)).first();
-        if (replSet == null){
-            return true;
+        try {
+            cli.getDatabase("local").drop();
+            logger.info("local database dropped");
+        } catch (Exception e) {
+            logger.warn("Couldn't drop local database");
+            return false;
         }
-        DeleteResult result = cli.getDatabase("local").getCollection("system.replset").deleteOne(new Document("_id", rs));
-        return result.getDeletedCount() == 1;
+        return true;
 
     }
-
     private static BsonTimestamp getOpLog(MongoClient cli) {
+        int seconds = 0;
+        int inc = 0;
+        try {
+            File oplogFile = Path.of(DB_PATH,"oplog.txt").toFile();
+            BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(oplogFile)));
+            String[] fields = br.readLine().split(":");
+
+            seconds = Integer.parseInt(fields[0]);
+            inc = Integer.parseInt(fields[1]);
+            
+        } catch (Exception e) {
+            logger.warn("Couldn't get oplog");
+
+        }
+        return new BsonTimestamp(seconds, inc);
+    }
+
+    private static BsonTimestamp getOpLog2(MongoClient cli) {
         Document tsDoc = cli.getDatabase("local").getCollection("oplog.rs")
                 .find()
                 .sort(new Document("$natural",-1))

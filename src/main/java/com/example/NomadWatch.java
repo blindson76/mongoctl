@@ -1,6 +1,9 @@
 package com.example;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -24,7 +27,26 @@ public class NomadWatch {
     }
 
     public <T> T watch(Class<T> classOfT) throws IOException, URISyntaxException {
+
         return gson.fromJson(httpGet(), classOfT);
+    }
+    public JsonArray watchList() {
+        try {
+            return JsonParser.parseReader(httpGet()).getAsJsonArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    public JsonObject watch() {
+        try {
+            return JsonParser.parseReader(httpGet()).getAsJsonObject();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private InputStreamReader httpGet() throws IOException, URISyntaxException {

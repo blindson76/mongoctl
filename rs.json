@@ -1,0 +1,40 @@
+{
+  "_id": "rs0",
+  "version": 1,
+  "term": 1,
+  "members": [
+    {
+      "_id": 0,
+      "host": "localhost:27017",
+      "arbiterOnly": false,
+      "buildIndexes": true,
+      "hidden": false,
+      "priority": 1.0,
+      "tags": {},
+      "secondaryDelaySecs": {
+        "$numberLong": "0"
+      },
+      "votes": 1
+    }
+  ],
+  "protocolVersion": {
+    "$numberLong": "1"
+  },
+  "writeConcernMajorityJournalDefault": true,
+  "settings": {
+    "chainingAllowed": true,
+    "heartbeatIntervalMillis": 2000,
+    "heartbeatTimeoutSecs": 10,
+    "electionTimeoutMillis": 10000,
+    "catchUpTimeoutMillis": -1,
+    "catchUpTakeoverDelayMillis": 30000,
+    "getLastErrorModes": {},
+    "getLastErrorDefaults": {
+      "w": 1,
+      "wtimeout": 0
+    },
+    "replicaSetId": {
+      "$oid": "68501a35aa38cc2a36d2164c"
+    }
+  }
+}
