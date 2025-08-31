@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	capi "github.com/hashicorp/consul/api"
@@ -36,7 +39,7 @@ func controllerJob() {
 		panic(err)
 	}
 	var activeMembers []string
-	activeMembersMap := make(MongoStatusMap)
+	var activeMembersMap MongoStatusMap
 
 	config := configurer(context.Background())
 	for cfg := range config.Observe() {
@@ -45,30 +48,11 @@ func controllerJob() {
 		sorted := sortMembersByOplog(nodes)
 		last := int(math.Min(float64(len(sorted)), 3))
 		selected := sorted[0:last]
-		selectedMap := make(MongoStatusMap)
-
-		var removedMembers []string
-		var addedMembers []string
+		activeMembersMap = make(MongoStatusMap)
 
 		for _, nodeId := range selected {
-			selectedMap[nodeId] = nodes[nodeId]
-			if _, ok := activeMembersMap[nodeId]; !ok {
-				addedMembers = append(addedMembers, nodeId)
-				activeMembersMap[nodeId] = nodes[nodeId]
-				activeMembers = append(activeMembers, nodeId)
-			}
-
+			activeMembersMap[nodeId] = nodes[nodeId]
 		}
-
-		for nodeId, _ := range activeMembersMap {
-			if _, ok := selectedMap[nodeId]; !ok {
-				removedMembers = append(removedMembers, nodeId)
-				delete(activeMembersMap, nodeId)
-			}
-		}
-
-		log.Println("added", addedMembers)
-		log.Println("removed", removedMembers)
 		activeMembers = selected
 		log.Println(activeMembers, activeMembersMap)
 
@@ -91,7 +75,6 @@ func controllerJob() {
 			panic(err)
 		}
 
-		var addedWG sync.WaitGroup
 		nomadNodes, _, err := ncli.Nodes().List(nil)
 		if err != nil {
 			panic(err)
@@ -101,44 +84,19 @@ func controllerJob() {
 			log.Println(i, nn.Name)
 			nodesIdMap[nn.Name] = nn.ID
 		}
-		for _, nodeId := range addedMembers {
-			addedWG.Add(1)
-			go func() {
-				defer addedWG.Done()
-				log.Println(nodeId)
-				_, err := ncli.Nodes().Meta().Apply(&napi.NodeMetaApplyRequest{
-					NodeID: nodesIdMap[nodeId],
-					Meta: map[string]*string{
-						"mongo.role": strptr("true"),
-					},
-				}, nil)
-				if err != nil {
-					log.Println("updatemeta err", err)
-				}
-
-			}()
+		args := []string{"run", "-detach"}
+		vars := map[string]string{
+			"replica-count":   fmt.Sprintf("%d", len(activeMembers)),
+			"replica-members": fmt.Sprintf("^(%s)$", strings.Join(activeMembers, "|")),
 		}
-		addedWG.Wait()
-		log.Println("done added")
-		for _, nodeId := range removedMembers {
-			addedWG.Add(1)
-			go func() {
-				defer addedWG.Done()
-				log.Println(nodeId)
-				_, err := ncli.Nodes().Meta().Apply(&napi.NodeMetaApplyRequest{
-					NodeID: nodesIdMap[nodeId],
-					Meta: map[string]*string{
-						"mongo.role": nil,
-					},
-				}, nil)
-				if err != nil {
-					log.Println("updatemeta err", err)
-				}
-
-			}()
+		for k, v := range vars {
+			args = append(args, "-var", fmt.Sprintf("%s=%s", k, v))
 		}
-		addedWG.Wait()
-		log.Println("done ")
+		args = append(args, filepath.Join(os.Getenv("CMS_ROOT"), "jobs", "mongo", "mongodb.hcl"))
+		log.Println("done. Deploying job...")
+		cmd := exec.Command("nomad", args...)
+		out, err := cmd.CombinedOutput()
+		log.Println(err, string(out))
 
 	}
 

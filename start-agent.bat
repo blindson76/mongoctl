@@ -31,6 +31,7 @@ echo starting consul
 start "consul-%CONSOLE_ID%" /min cmd /C consul agent -server -ui -config-file consul.hcl -data-dir %CONSUL_DATA_DIR% -node %NODE_NAME% -client %CSB_IP% -bind %CSB_IP% -bootstrap-expect 3 -retry-join 10.10.51.1  -retry-join 10.10.52.1  -retry-join 10.10.53.1  -retry-join 10.10.54.1  -retry-join 10.10.55.1  -retry-join 10.10.56.1
 start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config client.hcl -config client.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface loop -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:4648 -retry-join 10.10.52.1:4648 -retry-join 10.10.53.1:4648 -retry-join 10.10.54.1:4648 -retry-join 10.10.55.1:4648 -retry-join 10.10.56.1:4648
 node wait_nomad.js %NOMAD_ADDR%
+echo nomad ready!
 go run -C goctl . -prestart
 
 echo nomad ready

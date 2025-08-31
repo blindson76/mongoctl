@@ -114,12 +114,15 @@ func main() {
 }
 func prestart_job() {
 	cmd := exec.Command("mongod", "--dbpath", MONGO_DATA_DIR, "--bind_ip", MONGO_LOCAL_ADDR, "--port", MONGO_LOCAL_PORT)
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stdout
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stdout
 	err := cmd.Start()
 	if err != nil {
 		panic(err)
 	}
+	defer func() {
+		cmd.Process.Kill()
+	}()
 	client, err := mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://%s:%s", MONGO_LOCAL_ADDR, MONGO_LOCAL_PORT)).SetServerSelectionTimeout(time.Second * 5))
 	if err != nil {
 		log.Println("mongo connect error", err)
@@ -130,6 +133,7 @@ func prestart_job() {
 	}()
 	var users bson.M
 	err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "usersInfo", Value: "admin"}}).Decode(&users)
+	log.Println(err, users)
 	userExist := (err == nil && users["users"] != nil && len(users["users"].(bson.A)) > 0)
 	if userExist {
 		log.Println("user already exist")
