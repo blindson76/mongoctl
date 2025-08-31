@@ -7,22 +7,143 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	capi "github.com/hashicorp/consul/api"
+	napi "github.com/hashicorp/nomad/api"
 	"github.com/reactivex/rxgo/v2"
 )
 
-func controller_job() {
+var (
+	ncli *napi.Client
+)
+
+type MongoReplConfig struct {
+	Count       int    `json:"count"`
+	Primary     string `json:"primary"`
+	Members     string `json:"members"`
+	ReplSetId   string `json:"replSetId"`
+	ReplSetName string `json:"repLSetName"`
+}
+
+func controllerJob() {
+	ncli, err := napi.NewClient(&napi.Config{
+		Address: NOMAD_ADDR,
+	})
+	if err != nil {
+		panic(err)
+	}
+	var activeMembers []string
+	activeMembersMap := make(MongoStatusMap)
 
 	config := configurer(context.Background())
 	for cfg := range config.Observe() {
 		log.Println("new conf")
 		nodes := cfg.V.(MongoStatusMap)
-		log.Println(sortMembersByOplog(nodes))
-	}
-}
+		sorted := sortMembersByOplog(nodes)
+		last := int(math.Min(float64(len(sorted)), 3))
+		selected := sorted[0:last]
+		selectedMap := make(MongoStatusMap)
 
+		var removedMembers []string
+		var addedMembers []string
+
+		for _, nodeId := range selected {
+			selectedMap[nodeId] = nodes[nodeId]
+			if _, ok := activeMembersMap[nodeId]; !ok {
+				addedMembers = append(addedMembers, nodeId)
+				activeMembersMap[nodeId] = nodes[nodeId]
+				activeMembers = append(activeMembers, nodeId)
+			}
+
+		}
+
+		for nodeId, _ := range activeMembersMap {
+			if _, ok := selectedMap[nodeId]; !ok {
+				removedMembers = append(removedMembers, nodeId)
+				delete(activeMembersMap, nodeId)
+			}
+		}
+
+		log.Println("added", addedMembers)
+		log.Println("removed", removedMembers)
+		activeMembers = selected
+		log.Println(activeMembers, activeMembersMap)
+
+		mongoCfg := &MongoReplConfig{
+			Primary:     activeMembers[0],
+			Count:       len(activeMembers),
+			ReplSetId:   activeMembersMap[activeMembers[0]].ReplSetId,
+			ReplSetName: activeMembersMap[activeMembers[0]].ReplSetName,
+			Members:     strings.Join(activeMembers, ","),
+		}
+		mongoCfgStr, err := json.Marshal(mongoCfg)
+		if err != nil {
+			panic(err)
+		}
+		_, err = kv.Put(&capi.KVPair{
+			Key:   "config/mongo",
+			Value: mongoCfgStr,
+		}, nil)
+		if err != nil {
+			panic(err)
+		}
+
+		var addedWG sync.WaitGroup
+		nomadNodes, _, err := ncli.Nodes().List(nil)
+		if err != nil {
+			panic(err)
+		}
+		nodesIdMap := make(map[string]string)
+		for i, nn := range nomadNodes {
+			log.Println(i, nn.Name)
+			nodesIdMap[nn.Name] = nn.ID
+		}
+		for _, nodeId := range addedMembers {
+			addedWG.Add(1)
+			go func() {
+				defer addedWG.Done()
+				log.Println(nodeId)
+				_, err := ncli.Nodes().Meta().Apply(&napi.NodeMetaApplyRequest{
+					NodeID: nodesIdMap[nodeId],
+					Meta: map[string]*string{
+						"mongo.role": strptr("true"),
+					},
+				}, nil)
+				if err != nil {
+					log.Println("updatemeta err", err)
+				}
+
+			}()
+		}
+		addedWG.Wait()
+		log.Println("done added")
+		for _, nodeId := range removedMembers {
+			addedWG.Add(1)
+			go func() {
+				defer addedWG.Done()
+				log.Println(nodeId)
+				_, err := ncli.Nodes().Meta().Apply(&napi.NodeMetaApplyRequest{
+					NodeID: nodesIdMap[nodeId],
+					Meta: map[string]*string{
+						"mongo.role": nil,
+					},
+				}, nil)
+				if err != nil {
+					log.Println("updatemeta err", err)
+				}
+
+			}()
+		}
+		addedWG.Wait()
+		log.Println("done ")
+
+	}
+
+}
+func strptr(s string) *string { return &s }
 func sortMembersByOplog(members MongoStatusMap) []string {
 	type kv struct {
 		k string

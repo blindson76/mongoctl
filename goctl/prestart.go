@@ -61,6 +61,7 @@ var (
 	MONGO_RSNAME     string
 	CONSUL_HTTP_ADDR string
 	NODE_ID          string
+	NODE_NAME        string
 	CLUSTER_SIZE     uint
 	QUROUM_SIZE      uint
 )
@@ -80,7 +81,7 @@ var (
 func main() {
 	configure()
 	ctx, _ = context.WithTimeout(context.Background(), 10*time.Second)
-	log.Println("nodeid", NODE_ID, CLUSTER_SIZE, QUROUM_SIZE)
+	log.Println("nodeid", NODE_NAME, CLUSTER_SIZE, QUROUM_SIZE)
 	var err error
 	conf := capi.DefaultConfig()
 	conf.Address = CONSUL_HTTP_ADDR
@@ -95,15 +96,19 @@ func main() {
 	log.Println("start")
 	prestart := false
 	controller := false
+	mongo := false
 	flag.BoolVar(&prestart, "prestart", false, "")
 	flag.BoolVar(&controller, "controller", false, "")
+	flag.BoolVar(&mongo, "mongo", false, "")
 	flag.Parse()
 
 	if prestart {
 		log.Println("start prestart task")
 		prestart_job()
 	} else if controller {
-		controller_job()
+		controllerJob()
+	} else if mongo {
+		mongoWrapper()
 	}
 
 }
@@ -160,7 +165,7 @@ func prestart_job() {
 	}
 
 	status := &MongoStatus{
-		NodeId:        NODE_ID,
+		NodeId:        NODE_NAME,
 		ReplSetId:     replset.Settings.ReplicaSetId.String(),
 		ReplSetName:   replset.ID,
 		Members:       strings.Join(hosts, ","),
@@ -179,7 +184,7 @@ func prestart_job() {
 	sess := cli.Session()
 	kv := cli.KV()
 	agent := cli.Agent()
-	sessionName := fmt.Sprintf("%s.mongo-status", NODE_ID)
+	sessionName := fmt.Sprintf("%s.mongo-status", NODE_NAME)
 	var sessionId string
 
 	//log.Println(checks)
@@ -194,7 +199,7 @@ func prestart_job() {
 	// }
 	// return
 
-	statusVal, _, err := kv.Get(fmt.Sprintf("%s/%s", KV_PATH, NODE_ID), nil)
+	statusVal, _, err := kv.Get(fmt.Sprintf("%s/%s", KV_PATH, NODE_NAME), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -205,17 +210,23 @@ func prestart_job() {
 		//creating session
 		log.Println("creating session")
 		var check string
-		checks, err := agent.Checks()
-		if err != nil {
-			panic(err)
-		}
 
-		for k, v := range checks {
-			if v.Name == "Nomad Client HTTP Check" {
-				log.Println(k, v.Name)
-				check = v.CheckID
-				break
+	tryloop:
+		for i := 0; i < 5; i++ {
+			checks, err := agent.Checks()
+			if err != nil {
+				panic(err)
 			}
+
+			for k, v := range checks {
+				if v.Name == "Nomad Client HTTP Check" && v.Status == "passing" {
+					log.Println(k, v.Name)
+					check = v.CheckID
+					break tryloop
+				}
+			}
+			log.Println("check failed")
+			time.Sleep(time.Second * 2)
 		}
 		if check == "" {
 			panic("Check not found")
@@ -239,7 +250,7 @@ func prestart_job() {
 	}
 	log.Println("Mongo status:", string(statusStr))
 	done, _, err := kv.Acquire(&capi.KVPair{
-		Key:     fmt.Sprintf("%s/%s", KV_PATH, NODE_ID),
+		Key:     fmt.Sprintf("%s/%s", KV_PATH, NODE_NAME),
 		Session: sessionId,
 		Value:   statusStr,
 	}, nil)
@@ -290,7 +301,10 @@ func configure() {
 	viper.BindEnv("mongo.rsname", "MONGO_RS_NAME")
 
 	viper.SetDefault("node.id", "node-0")
-	viper.BindEnv("node.id", "NODE_ID")
+	viper.BindEnv("node.id", "0")
+
+	viper.SetDefault("node.name", "node-0")
+	viper.BindEnv("node.name", "NODE_NAME")
 
 	viper.SetDefault("nomad.addr", "http://127.0.0.1:4646")
 	viper.BindEnv("nomad.addr", "NOMAD_ADDR")
@@ -302,6 +316,7 @@ func configure() {
 	viper.BindEnv("cluster.size", "CLUSTER_SIZE")
 
 	NODE_ID = viper.GetString("node.id")
+	NODE_NAME = viper.GetString("node.name")
 	MONGO_RSNAME = viper.GetString("mongo.rsname")
 	MONGO_DATA_DIR = viper.GetString("mongo.dbpath")
 

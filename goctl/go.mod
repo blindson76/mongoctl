@@ -1,10 +1,13 @@
 module example.com
 
-go 1.23.8
+go 1.24.6
 
-toolchain go1.24.6
-
-require go.mongodb.org/mongo-driver/v2 v2.3.0
+require (
+	github.com/hashicorp/consul/api v1.32.1
+	github.com/reactivex/rxgo/v2 v2.5.0
+	github.com/spf13/viper v1.20.1
+	go.mongodb.org/mongo-driver/v2 v2.3.0
+)
 
 require (
 	github.com/armon/go-metrics v0.4.1 // indirect
@@ -15,7 +18,8 @@ require (
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/hashicorp/consul/api v1.32.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/hashicorp/cronexpr v1.1.2 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-hclog v1.5.0 // indirect
@@ -23,6 +27,7 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
+	github.com/hashicorp/nomad/api v0.0.0-20250829163458-87be37e8cced // indirect
 	github.com/hashicorp/serf v0.10.1 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -31,13 +36,11 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/reactivex/rxgo/v2 v2.5.0 // indirect
 	github.com/sagikazarmark/locafero v0.7.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.12.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
-	github.com/spf13/viper v1.20.1 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
