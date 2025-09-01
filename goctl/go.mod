@@ -1,4 +1,4 @@
-module example.com
+module example.com/goctl
 
 go 1.24.6
 

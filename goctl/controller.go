@@ -24,11 +24,15 @@ var (
 )
 
 type MongoReplConfig struct {
-	Count       int    `json:"count"`
-	Primary     string `json:"primary"`
-	Members     string `json:"members"`
-	ReplSetId   string `json:"replSetId"`
-	ReplSetName string `json:"repLSetName"`
+	Count         int    `json:"count"`
+	Primary       string `json:"primary"`
+	Members       string `json:"members"`
+	ReplSetId     string `json:"replSetId"`
+	ReplSetName   string `json:"repLSetName"`
+	OpLogFirstSec uint32 `json:"OpLogFirstSec"`
+	OpLogFirstInc uint32 `json:"OpLogFirstInc"`
+	OpLogLastSec  uint32 `json:"OpLogLastSec"`
+	OpLogLasttInc uint32 `json:"OpLogLasttInc"`
 }
 
 func controllerJob() {
@@ -55,13 +59,22 @@ func controllerJob() {
 		}
 		activeMembers = selected
 		log.Println(activeMembers, activeMembersMap)
+		memberStr := []string{}
+		for _, m := range activeMembers {
+			memb := activeMembersMap[m]
+			memberStr = append(memberStr, fmt.Sprintf("%s:%s:%s:%s", memb.NodeId, memb.NodeName, memb.MongoAddr, memb.MongoPort))
+		}
 
 		mongoCfg := &MongoReplConfig{
-			Primary:     activeMembers[0],
-			Count:       len(activeMembers),
-			ReplSetId:   activeMembersMap[activeMembers[0]].ReplSetId,
-			ReplSetName: activeMembersMap[activeMembers[0]].ReplSetName,
-			Members:     strings.Join(activeMembers, ","),
+			Primary:       activeMembers[0],
+			Count:         len(activeMembers),
+			ReplSetId:     activeMembersMap[activeMembers[0]].ReplSetId,
+			ReplSetName:   activeMembersMap[activeMembers[0]].ReplSetName,
+			Members:       strings.Join(memberStr, ","),
+			OpLogFirstSec: activeMembersMap[activeMembers[0]].OpLogFirstSec,
+			OpLogFirstInc: activeMembersMap[activeMembers[0]].OpLogFirstInc,
+			OpLogLastSec:  activeMembersMap[activeMembers[0]].OpLogLastSec,
+			OpLogLasttInc: activeMembersMap[activeMembers[0]].OpLogLasttInc,
 		}
 		mongoCfgStr, err := json.Marshal(mongoCfg)
 		if err != nil {
@@ -117,7 +130,7 @@ func sortMembersByOplog(members MongoStatusMap) []string {
 
 		if o1.OpLogLastSec == o2.OpLogLastSec {
 			if o1.OpLogLasttInc == o2.OpLogLasttInc {
-				return o1.NodeId > o2.NodeId
+				return o1.NodeName > o2.NodeName
 			}
 			return o1.OpLogLasttInc > o2.OpLogLasttInc
 		}
@@ -165,7 +178,7 @@ func watchStatus(ctx context.Context) rxgo.Observable {
 				if err != nil {
 					log.Println("unmarsh err", err)
 				} else {
-					curNodes[stat.NodeId] = stat
+					curNodes[stat.NodeName] = stat
 				}
 			}
 			items <- rxgo.Of(curNodes)

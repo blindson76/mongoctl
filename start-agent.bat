@@ -33,7 +33,7 @@ start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config client.hcl -c
 node wait_nomad.js %NOMAD_ADDR%
 echo nomad ready!
 go run -C goctl . -prestart
-
+pause
 echo nomad ready
 goto exit
 nomad node meta apply -unset role.mongo

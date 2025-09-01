@@ -23,6 +23,7 @@ type Settings struct {
 	ReplicaSetId bson.ObjectID `bson:"replicaSetId"`
 }
 type Member struct {
+	ID   int    `bson:"_id"`
 	Host string `bson:"host"`
 }
 type Replset struct {
@@ -40,6 +41,7 @@ type MongoStatusMap map[string]*MongoStatus
 
 type MongoStatus struct {
 	NodeId        string
+	NodeName      string
 	ReplSetId     string
 	ReplSetName   string
 	Members       string
@@ -48,6 +50,8 @@ type MongoStatus struct {
 	OpLogFirstInc uint32
 	OpLogLastSec  uint32
 	OpLogLasttInc uint32
+	MongoAddr     string
+	MongoPort     string
 }
 
 var (
@@ -169,8 +173,9 @@ func prestart_job() {
 	}
 
 	status := &MongoStatus{
-		NodeId:        NODE_NAME,
-		ReplSetId:     replset.Settings.ReplicaSetId.String(),
+		NodeId:        NODE_ID,
+		NodeName:      NODE_NAME,
+		ReplSetId:     replset.Settings.ReplicaSetId.Hex(),
 		ReplSetName:   replset.ID,
 		Members:       strings.Join(hosts, ","),
 		Term:          replset.Term,
@@ -178,6 +183,8 @@ func prestart_job() {
 		OpLogFirstInc: oplogFirst.Ts.I,
 		OpLogLastSec:  oplogLast.Ts.T,
 		OpLogLasttInc: oplogLast.Ts.I,
+		MongoAddr:     MONGO_ADDR,
+		MongoPort:     MONGO_PORT,
 	}
 	conf := capi.DefaultConfig()
 	conf.Address = CONSUL_HTTP_ADDR

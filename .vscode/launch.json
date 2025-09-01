@@ -5,6 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Launch file",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${file}",
+            "args": ["-C","goctl","-mongo"]
+        },
+        {
             "type": "java",
             "name": "Current File",
             "request": "launch",
