@@ -67,9 +67,10 @@ func mongoWrapper() {
 	}
 	var activeReplCfg ReplSetConfig
 	err = mongoCli.Database("admin").RunCommand(context.TODO(), bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&activeReplCfg)
-	log.Println("getcfg", err, activeReplCfg)
-	for _, member := range activeReplCfg.Config.Members {
-		log.Println("member", member.ID, member.Host)
+	if err == nil {
+		log.Println("applying current replset config")
+		memberCfg.ReplSetId = activeReplCfg.Config.Settings.ReplicaSetId.Hex()
+
 	}
 
 	isPrimary := false
@@ -81,7 +82,7 @@ func mongoWrapper() {
 		log.Println(replConfig, isPrimary, purgeDbRequired, rsInitRequired)
 
 		if isPrimary {
-			if replConfig.ReplSetId == "000000000000000000000000" {
+			if memberCfg.ReplSetId == "000000000000000000000000" {
 				rsInitRequired = true
 			}
 
