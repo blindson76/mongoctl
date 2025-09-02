@@ -31,6 +31,7 @@ type Replset struct {
 	Members  []Member `bson:"members"`
 	Term     int64    `bson:"term"`
 	Settings Settings `bson:"settings"`
+	Version  int      `bson:"version"`
 }
 
 type OpLog struct {
@@ -118,8 +119,8 @@ func main() {
 }
 func prestart_job() {
 	cmd := exec.Command("mongod", "--dbpath", MONGO_DATA_DIR, "--bind_ip", MONGO_LOCAL_ADDR, "--port", MONGO_LOCAL_PORT)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stdout
+	// cmd.Stdout = os.Stdout
+	// cmd.Stderr = os.Stdout
 	err := cmd.Start()
 	if err != nil {
 		panic(err)
@@ -127,7 +128,7 @@ func prestart_job() {
 	defer func() {
 		cmd.Process.Kill()
 	}()
-	client, err := mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://%s:%s", MONGO_LOCAL_ADDR, MONGO_LOCAL_PORT)).SetServerSelectionTimeout(time.Second * 5))
+	client, err := mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://%s:%s", MONGO_LOCAL_ADDR, MONGO_LOCAL_PORT)).SetServerSelectionTimeout(time.Second * 15))
 	if err != nil {
 		log.Println("mongo connect error", err)
 	}
@@ -137,8 +138,11 @@ func prestart_job() {
 	}()
 	var users bson.M
 	err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "usersInfo", Value: "admin"}}).Decode(&users)
-	log.Println(err, users)
-	userExist := (err == nil && users["users"] != nil && len(users["users"].(bson.A)) > 0)
+	if err != nil {
+		log.Panicln("Mongo connect error", err, cmd.ProcessState.ExitCode(), cmd.ProcessState.Exited())
+	}
+	log.Println("users", users)
+	userExist := (users["users"] != nil && len(users["users"].(bson.A)) > 0)
 	if userExist {
 		log.Println("user already exist")
 	} else {
@@ -158,34 +162,38 @@ func prestart_job() {
 	var replset Replset
 	var oplogFirst OpLog
 	var oplogLast OpLog
+
+	status := &MongoStatus{
+		NodeId:    NODE_ID,
+		NodeName:  NODE_NAME,
+		MongoAddr: MONGO_ADDR,
+		MongoPort: MONGO_PORT,
+	}
 	err = client.Database("local").Collection("system.replset").FindOne(ctx, bson.D{{Key: "_id", Value: MONGO_RSNAME}}).Decode(&replset)
 	if err != nil {
 		log.Println("not found")
 	}
+	if replset.ID != "" {
+		log.Println("has replicaset config")
 
-	opts := options.FindOne().SetSort(bson.D{{Key: "$natural", Value: -1}})
-	client.Database("local").Collection("oplog.rs").FindOne(ctx, bson.D{}, opts).Decode(&oplogFirst)
-	opts = options.FindOne().SetSort(bson.D{{Key: "$natural", Value: 1}})
-	client.Database("local").Collection("oplog.rs").FindOne(ctx, bson.D{}, opts).Decode(&oplogLast)
-	hosts := make([]string, len(replset.Members))
-	for i, m := range replset.Members {
-		hosts[i] = m.Host
+		opts := options.FindOne().SetSort(bson.D{{Key: "$natural", Value: -1}})
+		client.Database("local").Collection("oplog.rs").FindOne(ctx, bson.D{}, opts).Decode(&oplogFirst)
+		opts = options.FindOne().SetSort(bson.D{{Key: "$natural", Value: 1}})
+		client.Database("local").Collection("oplog.rs").FindOne(ctx, bson.D{}, opts).Decode(&oplogLast)
+		hosts := make([]string, len(replset.Members))
+		for i, m := range replset.Members {
+			hosts[i] = m.Host
+		}
+		status.ReplSetId = replset.Settings.ReplicaSetId.Hex()
+		status.ReplSetName = replset.ID
+		status.Members = strings.Join(hosts, ",")
+		status.Term = replset.Term
+		status.OpLogFirstSec = oplogFirst.Ts.T
+		status.OpLogFirstInc = oplogFirst.Ts.I
+		status.OpLogLastSec = oplogLast.Ts.T
+		status.OpLogLasttInc = oplogLast.Ts.I
 	}
 
-	status := &MongoStatus{
-		NodeId:        NODE_ID,
-		NodeName:      NODE_NAME,
-		ReplSetId:     replset.Settings.ReplicaSetId.Hex(),
-		ReplSetName:   replset.ID,
-		Members:       strings.Join(hosts, ","),
-		Term:          replset.Term,
-		OpLogFirstSec: oplogFirst.Ts.T,
-		OpLogFirstInc: oplogFirst.Ts.I,
-		OpLogLastSec:  oplogLast.Ts.T,
-		OpLogLasttInc: oplogLast.Ts.I,
-		MongoAddr:     MONGO_ADDR,
-		MongoPort:     MONGO_PORT,
-	}
 	conf := capi.DefaultConfig()
 	conf.Address = CONSUL_HTTP_ADDR
 	cli, err := capi.NewClient(conf)
@@ -311,8 +319,8 @@ func configure() {
 	viper.SetDefault("mongo.rsname", "rs0")
 	viper.BindEnv("mongo.rsname", "MONGO_RS_NAME")
 
-	viper.SetDefault("node.id", "node-0")
-	viper.BindEnv("node.id", "0")
+	viper.SetDefault("node.id", "0")
+	viper.BindEnv("node.id", "NODE_ID")
 
 	viper.SetDefault("node.name", "node-0")
 	viper.BindEnv("node.name", "NODE_NAME")

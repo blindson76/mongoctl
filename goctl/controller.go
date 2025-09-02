@@ -36,80 +36,81 @@ type MongoReplConfig struct {
 }
 
 func controllerJob() {
-	ncli, err := napi.NewClient(&napi.Config{
-		Address: NOMAD_ADDR,
-	})
-	if err != nil {
-		panic(err)
-	}
 	var activeMembers []string
 	var activeMembersMap MongoStatusMap
+	monitorMode := false
+	if item, _, err := kv.Get("config/mongo", nil); err == nil && item != nil {
+		var startupConfig MongoReplConfig
+		log.Println(item)
+		if err = json.Unmarshal(item.Value, &startupConfig); err == nil {
+			log.Println("read startup config", startupConfig)
+			log.Println("Starting in monitor mode")
+			monitorMode = true
+		}
+	}
 
-	config := configurer(context.Background())
+	config := configurer(context.Background(), monitorMode)
 	for cfg := range config.Observe() {
-		log.Println("new conf")
-		nodes := cfg.V.(MongoStatusMap)
-		sorted := sortMembersByOplog(nodes)
-		last := int(math.Min(float64(len(sorted)), 3))
-		selected := sorted[0:last]
-		activeMembersMap = make(MongoStatusMap)
+		if monitorMode {
+			log.Println("Status changed", cfg)
 
-		for _, nodeId := range selected {
-			activeMembersMap[nodeId] = nodes[nodeId]
-		}
-		activeMembers = selected
-		log.Println(activeMembers, activeMembersMap)
-		memberStr := []string{}
-		for _, m := range activeMembers {
-			memb := activeMembersMap[m]
-			memberStr = append(memberStr, fmt.Sprintf("%s:%s:%s:%s", memb.NodeId, memb.NodeName, memb.MongoAddr, memb.MongoPort))
-		}
+		} else {
 
-		mongoCfg := &MongoReplConfig{
-			Primary:       activeMembers[0],
-			Count:         len(activeMembers),
-			ReplSetId:     activeMembersMap[activeMembers[0]].ReplSetId,
-			ReplSetName:   activeMembersMap[activeMembers[0]].ReplSetName,
-			Members:       strings.Join(memberStr, ","),
-			OpLogFirstSec: activeMembersMap[activeMembers[0]].OpLogFirstSec,
-			OpLogFirstInc: activeMembersMap[activeMembers[0]].OpLogFirstInc,
-			OpLogLastSec:  activeMembersMap[activeMembers[0]].OpLogLastSec,
-			OpLogLasttInc: activeMembersMap[activeMembers[0]].OpLogLasttInc,
-		}
-		mongoCfgStr, err := json.Marshal(mongoCfg)
-		if err != nil {
-			panic(err)
-		}
-		_, err = kv.Put(&capi.KVPair{
-			Key:   "config/mongo",
-			Value: mongoCfgStr,
-		}, nil)
-		if err != nil {
-			panic(err)
-		}
+			log.Println("new conf")
+			nodes := cfg.V.(MongoStatusMap)
+			sorted := sortMembersByOplog(nodes)
+			last := int(math.Min(float64(len(sorted)), 3))
+			selected := sorted[0:last]
+			activeMembersMap = make(MongoStatusMap)
 
-		nomadNodes, _, err := ncli.Nodes().List(nil)
-		if err != nil {
-			panic(err)
+			for _, nodeId := range selected {
+				activeMembersMap[nodeId] = nodes[nodeId]
+			}
+			activeMembers = selected
+			log.Println(activeMembers, activeMembersMap)
+			memberStr := []string{}
+			for _, m := range activeMembers {
+				memb := activeMembersMap[m]
+				memberStr = append(memberStr, fmt.Sprintf("%s:%s:%s:%s", memb.NodeId, memb.NodeName, memb.MongoAddr, memb.MongoPort))
+			}
+
+			mongoCfg := &MongoReplConfig{
+				Primary:       activeMembers[0],
+				Count:         len(activeMembers),
+				ReplSetId:     activeMembersMap[activeMembers[0]].ReplSetId,
+				ReplSetName:   activeMembersMap[activeMembers[0]].ReplSetName,
+				Members:       strings.Join(memberStr, ","),
+				OpLogFirstSec: activeMembersMap[activeMembers[0]].OpLogFirstSec,
+				OpLogFirstInc: activeMembersMap[activeMembers[0]].OpLogFirstInc,
+				OpLogLastSec:  activeMembersMap[activeMembers[0]].OpLogLastSec,
+				OpLogLasttInc: activeMembersMap[activeMembers[0]].OpLogLasttInc,
+			}
+			mongoCfgStr, err := json.Marshal(mongoCfg)
+			if err != nil {
+				panic(err)
+			}
+			_, err = kv.Put(&capi.KVPair{
+				Key:   "config/mongo",
+				Value: mongoCfgStr,
+			}, nil)
+			if err != nil {
+				panic(err)
+			}
+			monitorMode = true
+			args := []string{"run", "-detach"}
+			vars := map[string]string{
+				"replica-count":   fmt.Sprintf("%d", len(activeMembers)),
+				"replica-members": fmt.Sprintf("^(%s)$", strings.Join(activeMembers, "|")),
+			}
+			for k, v := range vars {
+				args = append(args, "-var", fmt.Sprintf("%s=%s", k, v))
+			}
+			args = append(args, filepath.Join(os.Getenv("CMS_ROOT"), "jobs", "mongo", "mongodb.hcl"))
+			log.Println("done. Deploying job...")
+			cmd := exec.Command("nomad", args...)
+			out, err := cmd.CombinedOutput()
+			log.Println(err, string(out))
 		}
-		nodesIdMap := make(map[string]string)
-		for i, nn := range nomadNodes {
-			log.Println(i, nn.Name)
-			nodesIdMap[nn.Name] = nn.ID
-		}
-		args := []string{"run", "-detach"}
-		vars := map[string]string{
-			"replica-count":   fmt.Sprintf("%d", len(activeMembers)),
-			"replica-members": fmt.Sprintf("^(%s)$", strings.Join(activeMembers, "|")),
-		}
-		for k, v := range vars {
-			args = append(args, "-var", fmt.Sprintf("%s=%s", k, v))
-		}
-		args = append(args, filepath.Join(os.Getenv("CMS_ROOT"), "jobs", "mongo", "mongodb.hcl"))
-		log.Println("done. Deploying job...")
-		cmd := exec.Command("nomad", args...)
-		out, err := cmd.CombinedOutput()
-		log.Println(err, string(out))
 
 	}
 
@@ -187,15 +188,15 @@ func watchStatus(ctx context.Context) rxgo.Observable {
 	return rxgo.FromChannel(items)
 }
 
-func configurer(ctx context.Context) rxgo.Observable {
+func configurer(ctx context.Context, mode bool) rxgo.Observable {
 	watch := watchStatus(ctx)
 	watchChan := watch.Observe()
 	timer := time.NewTimer(time.Duration(math.MaxInt64))
-	configured := false
+	configured := mode
 	var config MongoStatusMap
 	configChan := make(chan rxgo.Item)
 	debounceTime := time.Second * 10
-	expired := false
+	expired := mode
 	go func() {
 
 	loop:
@@ -209,6 +210,7 @@ func configurer(ctx context.Context) rxgo.Observable {
 					break loop
 				}
 				nodes := item.V.(MongoStatusMap)
+				log.Println("status changed", configured, expired, nodes)
 				if configured {
 					if expired {
 						expired = false

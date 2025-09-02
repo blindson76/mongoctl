@@ -32,6 +32,8 @@ start "consul-%CONSOLE_ID%" /min cmd /C consul agent -server -ui -config-file co
 start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config client.hcl -config client.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface loop -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:4648 -retry-join 10.10.52.1:4648 -retry-join 10.10.53.1:4648 -retry-join 10.10.54.1:4648 -retry-join 10.10.55.1:4648 -retry-join 10.10.56.1:4648
 node wait_nomad.js %NOMAD_ADDR%
 echo nomad ready!
+echo starting mongo-control job
+nomad run -detach %CMS_ROOT%\jobs\mongo\mongo-control.hcl && echo ok.
 go run -C goctl . -prestart
 pause
 echo nomad ready
