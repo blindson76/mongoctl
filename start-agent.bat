@@ -34,9 +34,9 @@ node wait_nomad.js %NOMAD_ADDR%
 echo nomad ready!
 echo starting mongo-control job
 nomad run -detach %CMS_ROOT%\jobs\mongo\mongo-control.hcl && echo ok.
-go run -C goctl . -prestart
-pause
+go run -C goctl . -prestart > prestart-%NODE_ID%.log 2>&1
 echo nomad ready
+start cmd /k title %NODE_NAME%
 goto exit
 nomad node meta apply -unset role.mongo
 nomad var purge status/mongo/%NODE_NAME%

@@ -1,6 +1,7 @@
 
 client {
     gc_interval = "8h"
+    gc_disk_usage_threshold = 99
     enabled = true
   options = {
     "driver.allowlist" = "raw_exec,java"

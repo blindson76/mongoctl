@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,21 +12,283 @@ import (
 	"strings"
 	"time"
 
-	capi "github.com/hashicorp/consul/api"
-	"github.com/reactivex/rxgo/v2"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-type ReplSetConfig struct {
-	Config Replset `bson:"config"`
+type MongoWrapper struct {
+	cli      *mongo.Client
+	nodeID   string
+	nodeName string
+	mongo    *MongodMgm
+	mongoCli *MongoClient
 }
 
+func (w *MongoWrapper) GetMemberStatus() (*MongoStatus, error) {
+	mongoStatus := &MongoStatus{
+		NodeId:    NODE_ID,
+		NodeName:  NODE_NAME,
+		MongoAddr: MONGO_ADDR,
+		MongoPort: MONGO_PORT,
+	}
+	status, err := w.mongoCli.ReplSetGetStatus()
+	if err != nil {
+		log.Println("status err")
+		return nil, err
+	}
+	if status != nil {
+		mongoStatus.OpLogLastInc = status.Optimes.AppliedOpTime.Ts.I
+		mongoStatus.OpLogLastSec = status.Optimes.AppliedOpTime.Ts.T
+		mongoStatus.Term = status.Term
+	}
+	config, err := w.mongoCli.ReplSetGetConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	if config != nil {
+		log.Println("config", config)
+		mongoStatus.ReplSetId = config.Config.Settings.ReplicaSetId.Hex()
+		mongoStatus.ReplSetName = config.Config.ID
+		members := []string{}
+		for _, m := range config.Config.Members {
+			members = append(members, fmt.Sprintf("%d::%s", m.ID, m.Host))
+		}
+		mongoStatus.Members = strings.Join(members, ",")
+	}
+
+	return mongoStatus, nil
+
+}
+func (w *MongoWrapper) GetMongoStatus() (*MongoStatus, error) {
+	item, _, err := kv.Get(fmt.Sprintf("status/mongo/%s", NODE_NAME), nil)
+	if err != nil {
+		return nil, err
+	}
+	var status MongoStatus
+	if json.Unmarshal(item.Value, &status) != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+func (w *MongoWrapper) Start() {
+	configObserver := ConsulWatchKey[MongoReplConfig]("config/mongo")
+	w.mongo = &MongodMgm{
+		BindIp:   MONGO_ADDR,
+		BindPort: MONGO_PORT,
+		DBPath:   MONGO_DATA_DIR,
+		ReplSet:  MONGO_RSNAME,
+		Auth:     true,
+		KeyFile:  MONGO_SECRET_FILE,
+		OnExit: func(state *os.ProcessState) {
+			log.Println("Mongod exited", state)
+		},
+	}
+	if err := w.mongo.Start(); err != nil {
+		log.Panicln("Mongo start error", err)
+	}
+	w.mongoCli = w.mongo.Client()
+	err := w.mongoCli.ConnectWithOptions(func(opts *options.ClientOptions) *options.ClientOptions {
+		return opts.SetDirect(true).SetAuth(options.Credential{
+			Username: "admin",
+			Password: "123",
+		}).SetReplicaSet("")
+
+	})
+	if err != nil {
+		log.Panicln("Mongo client connect error", err)
+	}
+	for mongoConfigItem := range configObserver.Observe() {
+		mongoConfig := mongoConfigItem.V.(MongoReplConfig)
+
+		memberStatus, err := w.GetMemberStatus()
+		if err != nil {
+			log.Panicln("fetc mongostatus error", err)
+		}
+		isPrimary := mongoConfig.Primary == NODE_NAME
+		log.Println("mongoConfig", mongoConfig, "memberStatus", memberStatus)
+
+		//stop if mongod running
+		if !isPrimary && w.checkWipeRequirment(mongoConfig, memberStatus) {
+			log.Println("Stopping mongod to wipe")
+			pState := w.mongo.ShutdownWithTimeout(10 * time.Second)
+			log.Println("mongo exited?", pState)
+			if err := w.wipeDB(); err != nil {
+				panic(err)
+
+			}
+			if err := w.mongo.Start(); err != nil {
+				log.Panicln("Mongo start error", err)
+			}
+			w.mongoCli = w.mongo.Client()
+			err := w.mongoCli.ConnectWithOptions(func(opts *options.ClientOptions) *options.ClientOptions {
+				return opts.SetDirect(true).SetAuth(options.Credential{
+					Username: "admin",
+					Password: "123",
+				}).SetReplicaSet("")
+
+			})
+			if err != nil {
+				log.Panicln("Mongo client connect error", err)
+			}
+		}
+		//start if mongo not running
+		log.Println(isPrimary, mongoConfig.Primary, memberStatus.NodeName)
+		if isPrimary {
+			if err := w.configPrimary(mongoConfig, memberStatus); err != nil {
+				log.Panicln("Primary configuration error", err)
+			}
+		}
+		log.Println("Done")
+		time.Sleep(50000 * time.Second)
+	}
+	/*
+		load mongo config
+		load current status
+		check if is priamry or not
+		if secondary
+			check if wipe requirment
+				if true: wipe db
+
+	*/
+
+}
+
+func (w *MongoWrapper) configPrimary(mongoConfig MongoReplConfig, memberStatus *MongoStatus) error {
+	members := []Member{}
+
+	for _, member := range strings.Split(mongoConfig.Members, ",") {
+		tokens := strings.Split(member, ":")
+		id, _ := strconv.ParseInt(tokens[0], 10, 32)
+		host := fmt.Sprintf("%s:%s", tokens[2], tokens[3])
+		members = append(members, Member{ID: int(id), Host: host})
+	}
+	if memberStatus.ReplSetName == "" {
+		log.Println("Initiating replset")
+		if err := w.mongoCli.ReplSetInitiate(MONGO_RSNAME, members[0:1]); err != nil {
+			log.Panicln("Initiating primary only member failed", err)
+		}
+		if len(members) > 1 {
+			log.Println("waiting a while before add secondaries")
+			time.Sleep(3 * time.Second)
+			log.Println("Adding secondaries")
+			if err := w.mongoCli.AddMember(members[1:]); err != nil {
+				log.Panic("Adding secondary members error", err)
+			}
+		}
+	} else {
+		currentMembers := w.ParseMembers(memberStatus.Members)
+		desiredMember := w.ParseMembers(mongoConfig.Members)
+		reconfNeeded := false
+		if len(currentMembers) != len(desiredMember) {
+			reconfNeeded = true
+		} else {
+			for dk, dv := range desiredMember {
+				cv, ok := currentMembers[dk]
+				if !ok {
+					log.Println(dv.Host, "not found in current replset")
+					reconfNeeded = true
+					break
+				} else {
+					if cv.Host != dv.Host {
+						log.Println(fmt.Sprintf("%d:%s in current cfg will change to %s", dk, cv.Host, dv.Host))
+						reconfNeeded = true
+						break
+					}
+				}
+			}
+		}
+		if reconfNeeded {
+			cfg, err := w.mongoCli.ReplSetGetConfig()
+			if err != nil {
+				log.Println("couldnt get replconfig while reconfiguring", err)
+				return err
+			}
+			newMembers := []Member{}
+			for _, m := range desiredMember {
+				newMembers = append(newMembers, m)
+			}
+			cfg.Config.Members = newMembers
+			if err := w.mongoCli.ReplSetReconfig(&cfg.Config); err != nil {
+				log.Println("Reconfiguring replset error with", newMembers, err)
+				return err
+			}
+		}
+
+		log.Println("Checking reconfiguration", currentMembers, desiredMember)
+	}
+	return nil
+}
+func (w *MongoWrapper) ParseMembers(membersStr string) map[int]Member {
+	members := make(map[int]Member)
+	for _, m := range strings.Split(membersStr, ",") {
+		tokens := strings.Split(m, ":")
+		id, _ := strconv.ParseInt(tokens[0], 10, 32)
+		members[int(id)] = Member{ID: int(id), Host: fmt.Sprintf("%s:%s", tokens[2], tokens[3])}
+	}
+	return members
+}
+func (w *MongoWrapper) wipeDB() error {
+
+	log.Println("wiping dbpath", MONGO_DATA_DIR)
+	info, err := os.Stat(MONGO_DATA_DIR)
+	isExists := err != nil || info.IsDir()
+	if !isExists {
+		log.Println("Directory not exists")
+		return nil
+	}
+	entries, err := os.ReadDir(MONGO_DATA_DIR)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		entryPath := filepath.Join(MONGO_DATA_DIR, entry.Name())
+		err := os.RemoveAll(entryPath)
+		if err != nil {
+			log.Println("error while removing", entryPath, err)
+			return err
+		}
+	}
+	return nil
+}
+func (w *MongoWrapper) checkWipeRequirment(replConfig MongoReplConfig, memberCfg *MongoStatus) bool {
+	log.Println("Checking wipee requirments")
+	log.Println("replcfg", replConfig)
+	log.Println("memberCfg", memberCfg)
+	if memberCfg.ReplSetName == "" {
+		log.Println("replset not initiated")
+		return false
+	} else if replConfig.ReplSetId != memberCfg.ReplSetId && replConfig.ReplSetId != "" {
+		log.Println("replset id different")
+		return true
+	} else if replConfig.ReplSetName != memberCfg.ReplSetName {
+		log.Println("replset name different")
+		return true
+	} else if replConfig.OpLogFirstSec > uint32(memberCfg.OpLogLastInc) {
+		log.Println("oplogs too far")
+		return true
+	}
+	log.Println("wipe not required id different")
+	return false
+}
+
+/*
+
+- load
+
+*/
+
 func mongoWrapper() {
+
+	wrap := &MongoWrapper{}
+	wrap.Start()
+	if true {
+		return
+	}
 	var err error
 	log.Println("start mongo wrapper task")
-	obs := WatchKey[MongoReplConfig]("config/mongo").Observe()
+	configObserver := ConsulWatchKey[MongoReplConfig]("config/mongo")
 	var decidedReplCfg MongoReplConfig
 	var memberCfg MongoStatus
 	if item, _, err := kv.Get("config/mongo", nil); err == nil && item != nil {
@@ -84,7 +345,7 @@ func mongoWrapper() {
 	}
 
 	rsInitRequired := false
-	for item := range obs {
+	for item := range configObserver.Observe() {
 
 		var activeReplCfg ReplSetConfig
 		err = mongoCli.Database("admin").RunCommand(context.TODO(), bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&activeReplCfg)
@@ -150,7 +411,6 @@ func mongoWrapper() {
 			}
 			log.Println("Checking reconf requirment")
 			checkReplMembers(mongoCli, &replConfig)
-
 		}
 	}
 }
@@ -261,44 +521,4 @@ func wipeDBPath() error {
 	}
 	os.Mkdir(MONGO_DATA_DIR, 0)
 	return nil
-}
-func WatchKey[T any](path string) rxgo.Observable {
-
-	var lastIndex uint64 = 0
-	waitTime := 5 * time.Second
-	opts := &capi.QueryOptions{
-		WaitIndex: lastIndex,
-		WaitTime:  waitTime}
-	opts = opts.WithContext(ctx)
-	items := make(chan rxgo.Item)
-	go func() {
-		defer close(items)
-		for {
-			opts.WaitIndex = lastIndex
-			value, meta, err := kv.Get(path, opts)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					log.Println("stopping watch")
-					return
-				}
-				time.Sleep(time.Second * 2)
-				continue
-			}
-
-			if meta != nil {
-				if lastIndex == meta.LastIndex {
-					continue
-				}
-				lastIndex = meta.LastIndex
-			}
-			var obj T
-			err = json.Unmarshal(value.Value, &obj)
-			if err != nil {
-				items <- rxgo.Of(nil)
-			} else {
-				items <- rxgo.Of(obj)
-			}
-		}
-	}()
-	return rxgo.FromChannel(items)
 }

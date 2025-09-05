@@ -83,7 +83,7 @@ func controllerJob() {
 				OpLogFirstSec: activeMembersMap[activeMembers[0]].OpLogFirstSec,
 				OpLogFirstInc: activeMembersMap[activeMembers[0]].OpLogFirstInc,
 				OpLogLastSec:  activeMembersMap[activeMembers[0]].OpLogLastSec,
-				OpLogLasttInc: activeMembersMap[activeMembers[0]].OpLogLasttInc,
+				OpLogLasttInc: activeMembersMap[activeMembers[0]].OpLogLastInc,
 			}
 			mongoCfgStr, err := json.Marshal(mongoCfg)
 			if err != nil {
@@ -130,10 +130,10 @@ func sortMembersByOplog(members MongoStatusMap) []string {
 		o2 := kvList[j].v
 
 		if o1.OpLogLastSec == o2.OpLogLastSec {
-			if o1.OpLogLasttInc == o2.OpLogLasttInc {
+			if o1.OpLogLastInc == o2.OpLogLastInc {
 				return o1.NodeName > o2.NodeName
 			}
-			return o1.OpLogLasttInc > o2.OpLogLasttInc
+			return o1.OpLogLastInc > o2.OpLogLastInc
 		}
 		return o1.OpLogLastSec > o2.OpLogLastSec
 	})

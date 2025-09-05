@@ -5,6 +5,6 @@ taskkill -f -im mongod.exe
 taskkill /f /im nomad.exe
 taskkill /f /im consul.exe
 taskkill /f /fi "WINDOWTITLE eq Node-*"
-for %%l in (1 2 3 4) do (
+for %%l in (1 4 2) do (
     start cmd /c start-agent.bat %%l
 )

@@ -35,6 +35,13 @@ job "mongo-service-job" {
           command = "go"
           args    = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-mongo"]
       }
+      template {
+        data = "mongosecret"
+        destination = "${NOMAD_ALLOC_DIR}/keyfile"
+      }
+      env {
+        MONGO_SECRET_FILE = "${NOMAD_ALLOC_DIR}/keyfile"
+      }
 
     }
 
