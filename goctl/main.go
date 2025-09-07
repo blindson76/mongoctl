@@ -108,7 +108,7 @@ func configure() {
 	viper.SetDefault("node.name", "node-0")
 	viper.BindEnv("node.name", "NODE_NAME")
 
-	viper.SetDefault("nomad.addr", "http://127.0.0.1:4646")
+	viper.SetDefault("nomad.addr", "http://127.0.0.1:14646")
 	viper.BindEnv("nomad.addr", "NOMAD_ADDR")
 
 	viper.SetDefault("consul.http.addr", "http://127.0.0.1:8500")

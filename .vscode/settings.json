@@ -2,7 +2,7 @@
     "java.configuration.updateBuildConfiguration": "interactive",
     "terminal.integrated.env.windows": {
         "CMS_ROOT": "${workspaceFolder}",
-        "NOMAD_ADDR": "http://10.10.51.1:4646",
+        "NOMAD_ADDR": "http://10.10.51.1:14646",
         "CONSUL_HTTP_ADDR": "http://10.10.51.1:8500",
         "PATH": "${env:PATH};${workspaceFolder}"
     }

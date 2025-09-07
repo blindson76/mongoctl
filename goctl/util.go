@@ -160,6 +160,7 @@ func (c *MongoClient) ReplSetGetStatus() (*ReplSetStatus, error) {
 		return &activeReplStatus, nil
 
 	}
+	log.Println("ReplSetGetStatus err", err)
 	switch e := err.(type) {
 	case mongo.CommandError:
 		if e.Name == "NoReplicationEnabled" {
@@ -177,6 +178,7 @@ func (c *MongoClient) ReplSetGetConfig() (*ReplSetConfig, error) {
 		return &activeReplCfg, nil
 
 	}
+	log.Println("ReplSetGetStatus err", err)
 	switch e := err.(type) {
 	case mongo.CommandError:
 		if e.Name == "NoReplicationEnabled" {

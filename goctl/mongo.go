@@ -37,6 +37,7 @@ func (w *MongoWrapper) GetMemberStatus() (*MongoStatus, error) {
 		log.Println("status err")
 		return nil, err
 	}
+	log.Println("ReplSetGetStatus", status)
 	if status != nil {
 		mongoStatus.OpLogLastInc = status.Optimes.AppliedOpTime.Ts.I
 		mongoStatus.OpLogLastSec = status.Optimes.AppliedOpTime.Ts.T
@@ -47,6 +48,7 @@ func (w *MongoWrapper) GetMemberStatus() (*MongoStatus, error) {
 		return nil, err
 	}
 
+	log.Println("ReplSetGetConfig", config)
 	if config != nil {
 		log.Println("config", config)
 		mongoStatus.ReplSetId = config.Config.Settings.ReplicaSetId.Hex()
@@ -99,14 +101,40 @@ func (w *MongoWrapper) Start() {
 	if err != nil {
 		log.Panicln("Mongo client connect error", err)
 	}
+	if w.mongoCli.cli.Ping(context.TODO(), nil) != nil {
+		log.Panicln("Ping error", err)
+	}
+	time.Sleep(5 * time.Second)
 	for mongoConfigItem := range configObserver.Observe() {
 		mongoConfig := mongoConfigItem.V.(MongoReplConfig)
+		isPrimary := mongoConfig.Primary == NODE_NAME
 
 		memberStatus, err := w.GetMemberStatus()
 		if err != nil {
-			log.Panicln("fetc mongostatus error", err)
+			log.Println("fetc mongostatus error", err)
+			switch e := err.(type) {
+			case mongo.CommandError:
+				if e.Name == "InvalidReplicaSetConfig" && isPrimary {
+					log.Println("stale cfg. try reconfigure")
+
+					desiredMember := w.ParseMembers(mongoConfig.Members)
+					cfg, err := w.mongoCli.ReplSetGetConfig()
+					newMembers := []Member{}
+					for _, m := range desiredMember {
+						newMembers = append(newMembers, m)
+					}
+					cfg.Config.Members = newMembers
+					err = w.mongoCli.ReplSetReconfig(&cfg.Config)
+
+					log.Println("reconf", err)
+					if err != nil {
+						time.Sleep(3 * time.Second)
+						log.Println("stale conf recovery done")
+						continue
+					}
+				}
+			}
 		}
-		isPrimary := mongoConfig.Primary == NODE_NAME
 		log.Println("mongoConfig", mongoConfig, "memberStatus", memberStatus)
 
 		//stop if mongod running
@@ -137,7 +165,7 @@ func (w *MongoWrapper) Start() {
 		log.Println(isPrimary, mongoConfig.Primary, memberStatus.NodeName)
 		if isPrimary {
 			if err := w.configPrimary(mongoConfig, memberStatus); err != nil {
-				log.Panicln("Primary configuration error", err)
+				log.Println("Primary configuration error", err)
 			}
 		}
 		log.Println("Done")
@@ -164,8 +192,10 @@ func (w *MongoWrapper) configPrimary(mongoConfig MongoReplConfig, memberStatus *
 		host := fmt.Sprintf("%s:%s", tokens[2], tokens[3])
 		members = append(members, Member{ID: int(id), Host: host})
 	}
-	if memberStatus.ReplSetName == "" {
-		log.Println("Initiating replset")
+	hasStaleConfig := memberStatus.ReplSetId == "" && mongoConfig.ReplSetId != ""
+	log.Println("Stale config", hasStaleConfig)
+	if memberStatus.ReplSetName == "" && !hasStaleConfig {
+		log.Println("Initiating replset", MONGO_RSNAME, members[0:1])
 		if err := w.mongoCli.ReplSetInitiate(MONGO_RSNAME, members[0:1]); err != nil {
 			log.Panicln("Initiating primary only member failed", err)
 		}
@@ -181,7 +211,10 @@ func (w *MongoWrapper) configPrimary(mongoConfig MongoReplConfig, memberStatus *
 		currentMembers := w.ParseMembers(memberStatus.Members)
 		desiredMember := w.ParseMembers(mongoConfig.Members)
 		reconfNeeded := false
-		if len(currentMembers) != len(desiredMember) {
+		if hasStaleConfig {
+			reconfNeeded = true
+		} else if len(currentMembers) != len(desiredMember) {
+			log.Println("reconf due to stale config")
 			reconfNeeded = true
 		} else {
 			for dk, dv := range desiredMember {
@@ -209,6 +242,13 @@ func (w *MongoWrapper) configPrimary(mongoConfig MongoReplConfig, memberStatus *
 			for _, m := range desiredMember {
 				newMembers = append(newMembers, m)
 			}
+			if hasStaleConfig {
+				cfg = &ReplSetConfig{
+					Config: Replset{
+						ID: MONGO_RSNAME,
+					},
+				}
+			}
 			cfg.Config.Members = newMembers
 			if err := w.mongoCli.ReplSetReconfig(&cfg.Config); err != nil {
 				log.Println("Reconfiguring replset error with", newMembers, err)
@@ -224,6 +264,9 @@ func (w *MongoWrapper) ParseMembers(membersStr string) map[int]Member {
 	members := make(map[int]Member)
 	for _, m := range strings.Split(membersStr, ",") {
 		tokens := strings.Split(m, ":")
+		if len(tokens) < 4 {
+			continue
+		}
 		id, _ := strconv.ParseInt(tokens[0], 10, 32)
 		members[int(id)] = Member{ID: int(id), Host: fmt.Sprintf("%s:%s", tokens[2], tokens[3])}
 	}
@@ -410,7 +453,10 @@ func mongoWrapper() {
 				}
 			}
 			log.Println("Checking reconf requirment")
-			checkReplMembers(mongoCli, &replConfig)
+			err = checkReplMembers(mongoCli, &replConfig)
+			if err != nil {
+				log.Panicln("check replmember err", err)
+			}
 		}
 	}
 }
@@ -466,6 +512,9 @@ func checkReplMembers(cli *mongo.Client, replCfg *MongoReplConfig) error {
 		log.Println("reconf cmd", cmd)
 
 		err = cli.Database("admin").RunCommand(context.TODO(), cmd).Err()
+		if err != nil {
+			log.Println("reconf err", err)
+		}
 		return err
 
 	}

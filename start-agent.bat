@@ -13,7 +13,7 @@ setlocal EnableDelayedExpansion
 set NOMAD_DATA_DIR=%~dp0data\nomad\%CONSOLE_ID%
 set MONGO_DB_PATH=%~dp0data\mongo\%CONSOLE_ID%
 set CONSUL_DATA_DIR=%~dp0data\consul\%CONSOLE_ID%
-set NOMAD_ADDR=http://%CSB_IP%:4646
+set NOMAD_ADDR=http://%CSB_IP%:14646
 set CONSUL_HTTP_ADDR=http://%CSB_IP%:8500
 set MONGO_PORT=27017
 set MONGO_ADDR=%CSB_IP%
@@ -29,14 +29,15 @@ mkdir data\mongo\%CONSOLE_ID%
 rem node wait.js 1
 echo starting consul
 start "consul-%CONSOLE_ID%" /min cmd /C consul agent -server -ui -config-file consul.hcl -data-dir %CONSUL_DATA_DIR% -node %NODE_NAME% -client %CSB_IP% -bind %CSB_IP% -bootstrap-expect 3 -retry-join 10.10.51.1  -retry-join 10.10.52.1  -retry-join 10.10.53.1  -retry-join 10.10.54.1  -retry-join 10.10.55.1  -retry-join 10.10.56.1
-start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config client.hcl -config client.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface loop -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:4648 -retry-join 10.10.52.1:4648 -retry-join 10.10.53.1:4648 -retry-join 10.10.54.1:4648 -retry-join 10.10.55.1:4648 -retry-join 10.10.56.1:4648
+start "nomad-%CONSOLE_ID%" /min cmd /C nomad agent -server -config client.hcl -config server.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface loop -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:14648 -retry-join 10.10.52.1:14648 -retry-join 10.10.53.1:14648 -retry-join 10.10.54.1:14648 -retry-join 10.10.55.1:14648 -retry-join 10.10.56.1:14648
 node wait_nomad.js %NOMAD_ADDR%
 echo nomad ready!
 echo starting mongo-control job
 nomad run -detach %CMS_ROOT%\jobs\mongo\mongo-control.hcl && echo ok.
 go run -C goctl . -prestart > prestart-%NODE_ID%.log 2>&1
 echo nomad ready
-start cmd /k title %NODE_NAME%
+rem start cmd /k title %NODE_NAME%
+
 goto exit
 nomad node meta apply -unset role.mongo
 nomad var purge status/mongo/%NODE_NAME%
