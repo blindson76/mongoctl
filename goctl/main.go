@@ -61,10 +61,14 @@ func main() {
 	controller := false
 	test := false
 	mongo := false
+	kafkaPrestart := false
+	kafkaServer := false
 	flag.BoolVar(&prestart, "prestart", false, "")
 	flag.BoolVar(&controller, "controller", false, "")
 	flag.BoolVar(&mongo, "mongo", false, "")
 	flag.BoolVar(&test, "test", false, "")
+	flag.BoolVar(&kafkaPrestart, "kafka-prestart", false, "")
+	flag.BoolVar(&kafkaServer, "kafka-server", false, "")
 	flag.Parse()
 
 	if prestart {
@@ -76,7 +80,12 @@ func main() {
 		mongoWrapper()
 	} else if test {
 		testJob()
+	} else if kafkaPrestart {
+		kafkaPrestartJob()
+	} else if kafkaServer {
+		kafkaServerJob()
 	}
+	log.Println("Finish")
 
 }
 

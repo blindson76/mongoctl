@@ -311,3 +311,49 @@ func ConsulWatchKey[T any](path string) rxgo.Observable {
 	}()
 	return rxgo.FromChannel(items)
 }
+
+func ConsulWatcKeyList[T any](path string) rxgo.Observable {
+
+	var lastIndex uint64 = 0
+	waitTime := 5 * time.Second
+	opts := &capi.QueryOptions{
+		WaitIndex: lastIndex,
+		WaitTime:  waitTime}
+	opts = opts.WithContext(ctx)
+	items := make(chan rxgo.Item)
+	go func() {
+		defer close(items)
+		for {
+			opts.WaitIndex = lastIndex
+			value, meta, err := kv.List(path, opts)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Println("stopping watch")
+					return
+				}
+				time.Sleep(time.Second * 2)
+				continue
+			}
+
+			if meta != nil {
+				if lastIndex == meta.LastIndex {
+					continue
+				}
+				lastIndex = meta.LastIndex
+			}
+
+			elems := make([]T, len(value))
+			for i, p := range value {
+				var val T
+				err = json.Unmarshal(p.Value, &val)
+				if err != nil {
+					log.Println("unmarsh err", err)
+				} else {
+					elems[i] = val
+				}
+			}
+			items <- rxgo.Of(elems)
+		}
+	}()
+	return rxgo.FromChannel(items)
+}

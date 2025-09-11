@@ -19,6 +19,31 @@ set MONGO_PORT=27017
 set MONGO_ADDR=%CSB_IP%
 set MONGO_LOCAL_ADDR=%CSB_IP%
 
+
+set KAFKA_DATA_DIR=%~dp0data\kafka\%CONSOLE_ID%\data
+set KAFKA_META_DIR=%~dp0data\kafka\%CONSOLE_ID%\meta
+set KAFKA_LOG_DIR=%~dp0data\kafka\%CONSOLE_ID%\log
+
+set KAFKA_CLUSTER_ID=b_ue-dU-TrybRneDxGS_Ow
+if "%CONSOLE_ID%"=="1" (
+    set KAFKA_STORAGE_ID=279THXvBR4WGfBj_y1nstQ
+)
+if "%CONSOLE_ID%"=="2" (
+    set KAFKA_STORAGE_ID=TMoKnP9HRz-NVmhcEVuSGQ
+)
+if "%CONSOLE_ID%"=="3" (
+    set KAFKA_STORAGE_ID=x1AWfhMTQ7u_isq4a04w6Q
+)
+if "%CONSOLE_ID%"=="4" (
+    set KAFKA_STORAGE_ID=mP3P8tD3RqSCn5ytqs6Sqw
+)
+if "%CONSOLE_ID%"=="5" (
+    set KAFKA_STORAGE_ID=dJrECDp5Rue3vxpq51EaLQ
+)
+if "%CONSOLE_ID%"=="6" (
+    set KAFKA_STORAGE_ID=Bhml8362S5eGsFfP7o7noQ
+)
+
 set RS_NAME=rs0
 set CLASSPATH=%~dp0\target\*;%~dp0\target\lib\*;
 rmdir /S /Q %NOMAD_DATA_DIR%
