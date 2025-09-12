@@ -152,12 +152,6 @@ if errorlevel 1 (
 ) else (
   echo Prestart OK. Logs: "%LOG_DIR%\prestart-%NODE_ID%.log"
 )
-
-rem =========================
-rem Optional: Java prestart (commented)
-rem =========================
-rem java com.example.MongoPrestart
-start cmd /k title %NODE_ID%
 goto :end
 
 rem =========================
