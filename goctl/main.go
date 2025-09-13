@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"example.com/goctl/replset"
+	store "example.com/goctl/store"
 	"flag"
+	capi "github.com/hashicorp/consul/api"
+	"github.com/spf13/viper"
 	"log"
 	"os"
 	"path/filepath"
-	"time"
-
-	capi "github.com/hashicorp/consul/api"
-	"github.com/spf13/viper"
 )
 
 var (
@@ -44,17 +44,26 @@ var (
 
 func main() {
 	configure()
-	ctx, _ = context.WithTimeout(context.Background(), 10*time.Second)
-	var err error
-	conf := capi.DefaultConfig()
-	conf.Address = CONSUL_HTTP_ADDR
-	cli, err = capi.NewClient(conf)
-	if err != nil {
-		panic(err)
-	}
-	sess = cli.Session()
-	kv = cli.KV()
-	agent = cli.Agent()
+
+	cs, _ := store.NewConsulStore[replset.MongoCandidateReport,
+		replset.MongoReplSetSpec,
+		replset.MongoHealthStatus,
+	](CONSUL_HTTP_ADDR, store.ConsulStoreConfig{
+		CandidateReportPath: "status/mongo",
+		HealthStatusPath:    "health/mongo",
+		ReplSetConfigPath:   "config/mongo",
+	})
+	mc := replset.NewMongoController(replset.MongoConfig{
+		Addr:      MONGO_ADDR,
+		Port:      MONGO_PORT,
+		LocalAddr: MONGO_LOCAL_ADDR,
+		LocalPort: MONGO_LOCAL_PORT,
+		DBPath:    MONGO_DATA_DIR,
+		RSName:    MONGO_RSNAME,
+		NodeName:  NODE_NAME,
+		NodeID:    NODE_ID,
+		KeyFile:   MONGO_SECRET_FILE,
+	}, cs)
 
 	log.Println("start")
 	prestart := false
@@ -73,17 +82,11 @@ func main() {
 
 	if prestart {
 		log.Println("start prestart task")
-		prestart_job()
+		mc.PreStartTask(NODE_NAME)
 	} else if controller {
-		controllerJob()
+		mc.ControllerTask()
 	} else if mongo {
-		mongoWrapper()
-	} else if test {
-		testJob()
-	} else if kafkaPrestart {
-		kafkaPrestartJob()
-	} else if kafkaServer {
-		kafkaServerJob()
+		mc.MemberTask()
 	}
 	log.Println("Finish")
 

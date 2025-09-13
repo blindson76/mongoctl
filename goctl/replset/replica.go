@@ -1,22 +1,17 @@
 package replset
 
 import (
+	"example.com/goctl/store"
 	"log"
 	"slices"
 	"time"
 )
 
 type ReplicaSetStatus int
-type Unique[T any] interface {
-	GetId() string
-}
-
-type Orderable[T any] interface {
-	Less(other T) bool
-}
-
-type PreStartController[C any] interface {
-	Collect() (C, error)
+type controllerInterface[C, S, H any] interface {
+	collect() (*C, error)
+	generateReplConfig([]C) *S
+	memberTask(<-chan S) <-chan H
 }
 
 const (
@@ -27,84 +22,66 @@ const (
 	ERROR
 )
 
-type CandidateReportType[C any] interface {
-	Orderable[C]
-	Unique[C]
-}
-type HealtStatusType[H any] interface {
-	Orderable[H]
-	Unique[H]
-	IsHealthy() bool
-}
-type ReplicaSetSpecType[S any] interface {
-	ApplyConfig() error
-}
-
-type StoreBackend[C, S, H any] interface {
-	PutCandidateReport(Val C) error
-	WatchCandidateReports() <-chan []C
-	UpdateHealthStatus(status H) error
-	WatchHealthStatus() <-chan []H
-	UpdateReplSetConfig(cfg S) error
-	WatchReplSetConfig() <-chan S
-}
-
-// ReplicaSetController definition remains unchanged
-type ReplicaSetController[
-	C CandidateReportType[C],
-	S ReplicaSetSpecType[S],
-	H HealtStatusType[H],
+// replicaSetController definition remains unchanged
+type replicaSetController[
+	C store.CandidateReportType[C],
+	S store.ReplicaSetSpecType[S],
+	H store.HealtStatusType[H],
 ] struct {
-	PreStartController[C]
+	collector    controllerInterface[C, S, H]
 	name         string
 	replConfig   *S
 	reports      []C
 	healthStatus []H
-	store        StoreBackend[C, S, H]
+	store        store.Provider[C, S, H]
 	ch           chan string
 	state        ReplicaSetStatus
 	timer        *time.Timer
 	candidates   []C
 }
 
-func (rs *ReplicaSetController[
+func (rs *replicaSetController[
 	C,
 	S,
 	H,
 ]) PreStartTask(id string) {
-	res, err := rs.Collect()
+	res, err := rs.collector.collect()
 	if err != nil {
 		panic(err)
 	}
-	log.Println(res)
+	err = rs.store.PutCandidateReport(id, res)
+	if err != nil {
+		panic(err)
+	}
 
 }
 
-func (rs *ReplicaSetController[
+func (rs *replicaSetController[
 	C,
 	S,
 	H]) ControllerTask() {
 	rs.timer = time.NewTimer(5 * time.Minute)
+	candidatesChan := rs.store.WatchCandidateReports()
+	healthStatusChan := rs.store.WatchHealthStatus()
 	for {
 		select {
-		case candidateReports := <-rs.store.WatchCandidateReports():
+		case candidateReports := <-candidatesChan:
 			rs.handleCandidates(candidateReports)
-		case healthStatus := <-rs.store.WatchHealthStatus():
+		case healthStatus := <-healthStatusChan:
 			rs.handleHealthStatus(healthStatus)
 		case t := <-rs.timer.C:
 			rs.handleTimer(t)
 		}
 	}
 }
-func (rs *ReplicaSetController[
+func (rs *replicaSetController[
 	C,
 	S,
 	H]) MemberTask() {
-
-	var cfg S
-	cfg.ApplyConfig()
+	configChan := rs.store.WatchReplSetConfig()
+	rs.collector.memberTask(configChan)
 }
-func (rs *ReplicaSetController[
+func (rs *replicaSetController[
 	C,
 	S,
 	H]) handleCandidates(candidates []C) {
@@ -118,11 +95,11 @@ func (rs *ReplicaSetController[
 			rs.state = CONFIGURATION
 		} else if numOfCandidates >= 3 {
 			log.Println("wait a while to others")
-			rs.timer = time.NewTimer(10 * time.Second)
+			rs.timer = time.NewTimer(5 * time.Second)
 			rs.state = CONFIGURATION
 		} else if numOfCandidates > 0 {
 			//This is worst case. we have members to initiate replicaset
-			rs.timer = time.NewTimer(1 * time.Minute)
+			rs.timer = time.NewTimer(10 * time.Second)
 			rs.state = CONFIGURATION
 			log.Println("")
 		}
@@ -138,24 +115,31 @@ func (rs *ReplicaSetController[
 	}
 }
 
-func (rs *ReplicaSetController[
+func (rs *replicaSetController[
 	C,
 	S,
 	H,
 ]) handleHealthStatus(healthStatus []H) {
 	log.Println(healthStatus)
 }
-func (rs *ReplicaSetController[C, S, H]) handleTimer(t time.Time) {
+func (rs *replicaSetController[C, S, H]) handleTimer(t time.Time) {
 	log.Println("timer", t)
 	if rs.state == INITIATION {
 		panic("Replset Configuration timeout")
 	} else if rs.state == CONFIGURATION {
 		log.Println("here we publish initial configuration")
+		sortCandidates(rs.candidates)
+		replCfg := rs.collector.generateReplConfig(rs.candidates)
+		err := rs.store.UpdateReplSetConfig(replCfg)
+		if err != nil {
+			return
+		}
+		//rs.
 
 	}
 }
 
-func sortCandidates[T Orderable[T]](candidates []T) {
+func sortCandidates[T store.Orderable[T]](candidates []T) {
 	slices.SortFunc(candidates, func(a, b T) int {
 		switch {
 		case a.Less(b):
@@ -166,31 +150,6 @@ func sortCandidates[T Orderable[T]](candidates []T) {
 			return 0
 		}
 	})
-}
-
-type MongoStatusReport struct {
-}
-
-func (m MongoStatusReport) Less(o MongoStatusReport) bool {
-	return false
-}
-
-func (m MongoStatusReport) GetId() string {
-	return "0"
-}
-
-type MongoReplSetSpec struct {
-}
-
-type MongoHealthStatus struct {
-}
-
-func (m MongoHealthStatus) IsHealthy() bool {
-	return true
-}
-
-func (m MongoHealthStatus) GetId() string {
-	return "0"
 }
 
 func test() {
