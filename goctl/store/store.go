@@ -26,11 +26,7 @@ type HealtStatusType[H any] interface {
 	Unique[H]
 	IsHealthy() bool
 }
-type ReplicaSetSpecType[S any] interface {
-	ApplyConfig() error
-}
-
-type Provider[C CandidateReportType[C], S ReplicaSetSpecType[S], H HealtStatusType[H]] interface {
+type Provider[C CandidateReportType[C], S any, H HealtStatusType[H]] interface {
 	PutCandidateReport(id string, Val *C) error
 	WatchCandidateReports() <-chan []C
 	UpdateHealthStatus(id string, status H) error
@@ -38,7 +34,7 @@ type Provider[C CandidateReportType[C], S ReplicaSetSpecType[S], H HealtStatusTy
 	UpdateReplSetConfig(cfg *S) error
 	WatchReplSetConfig() <-chan S
 }
-type ConsulStore[C CandidateReportType[C], S ReplicaSetSpecType[S], H HealtStatusType[H]] struct {
+type ConsulStore[C CandidateReportType[C], S any, H HealtStatusType[H]] struct {
 	Provider[C, S, H]
 	candidateReportPath string
 	healthStatusPath    string
@@ -51,7 +47,7 @@ type ConsulStoreConfig struct {
 	ReplSetConfigPath   string
 }
 
-func NewConsulStore[C CandidateReportType[C], S ReplicaSetSpecType[S], H HealtStatusType[H]](consulAddr string, config ConsulStoreConfig) (*ConsulStore[C, S, H], error) {
+func NewConsulStore[C CandidateReportType[C], S any, H HealtStatusType[H]](consulAddr string, config ConsulStoreConfig) (*ConsulStore[C, S, H], error) {
 	store := &ConsulStore[C, S, H]{
 		candidateReportPath: config.CandidateReportPath,
 		healthStatusPath:    config.HealthStatusPath,
@@ -71,7 +67,7 @@ func (c ConsulStore[C, S, H]) PutCandidateReport(id string, val *C) error {
 	sess := cli.Session()
 	kv := cli.KV()
 	agent := cli.Agent()
-	sessionName := fmt.Sprintf("%s.mongo-status", id)
+	sessionName := fmt.Sprintf("repl-member-%s-%s", c.candidateReportPath, id)
 	var sessionId string
 	statusVal, _, err := kv.Get(fmt.Sprintf("%s/%s", c.candidateReportPath, id), nil)
 	if err != nil {
@@ -122,7 +118,7 @@ func (c ConsulStore[C, S, H]) PutCandidateReport(id string, val *C) error {
 	if err != nil {
 		return err
 	}
-	log.Println("Mongo status:", string(statusStr))
+	log.Println("Report:", string(statusStr))
 	_, _, err = kv.Acquire(&capi.KVPair{
 		Key:     fmt.Sprintf("%s/%s", c.candidateReportPath, id),
 		Session: sessionId,

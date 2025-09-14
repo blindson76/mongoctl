@@ -25,7 +25,7 @@ const (
 // replicaSetController definition remains unchanged
 type replicaSetController[
 	C store.CandidateReportType[C],
-	S store.ReplicaSetSpecType[S],
+	S any,
 	H store.HealtStatusType[H],
 ] struct {
 	collector    controllerInterface[C, S, H]

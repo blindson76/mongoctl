@@ -100,12 +100,12 @@ func kafkaPrestartJob() {
 
 	// 2) En az 3 controller adresi toplayana kadar bekle
 	var entries []KafkaStatus
-	for items := range ConsulWatcKeyList[KafkaStatus]("status/kafka").Observe() {
-		entries = items.V.([]KafkaStatus)
-		if len(entries) >= 3 {
-			break
-		}
-	}
+	//for items := range ConsulWatcKeyList[KafkaStatus]("status/kafka").Observe() {
+	//	entries = items.V.([]KafkaStatus)
+	//	if len(entries) >= 3 {
+	//		break
+	//	}
+	//}
 
 	// 3) Bootstrap stringleri oluştur
 	var ctrlEndpoints []string

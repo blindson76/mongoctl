@@ -28,6 +28,16 @@ var (
 	NODE_NAME         string
 	CLUSTER_SIZE      uint
 	QUROUM_SIZE       uint
+
+	KAFKA_CLUSTER_ID      string
+	KAFKA_STORAGE_ID      string
+	KAFKA_LOG_DIR         string
+	KAFKA_DATA_DIR        string
+	KAFKA_META_DIR        string
+	KAFKA_BROKER_ADDR     string
+	KAFKA_CONTROLLER_ADDR string
+	KAFKA_BROKER_PORT     string
+	KAFKA_CONTROLLER_PORT string
 )
 var (
 	cli   *capi.Client
@@ -35,9 +45,7 @@ var (
 	kv    *capi.KV
 	agent *capi.Agent
 )
-var (
-	KV_PATH string
-)
+
 var (
 	ctx context.Context
 )
@@ -64,7 +72,27 @@ func main() {
 		NodeID:    NODE_ID,
 		KeyFile:   MONGO_SECRET_FILE,
 	}, cs)
-
+	ks, _ := store.NewConsulStore[replset.KafkaCandidateReport,
+		replset.KafkaReplSetSpec,
+		replset.KafkaHealthStatus,
+	](CONSUL_HTTP_ADDR, store.ConsulStoreConfig{
+		CandidateReportPath: "status/kafka",
+		HealthStatusPath:    "health/kafka",
+		ReplSetConfigPath:   "config/kafka",
+	})
+	kc := replset.NewKafkaController(replset.KafkaConfig{
+		ClusterID:      KAFKA_CLUSTER_ID,
+		StorageID:      KAFKA_STORAGE_ID,
+		NodeID:         NODE_ID,
+		NodeName:       NODE_NAME,
+		LogDir:         KAFKA_LOG_DIR,
+		MetaDir:        KAFKA_META_DIR,
+		DatDir:         KAFKA_DATA_DIR,
+		BrokerAddr:     KAFKA_BROKER_ADDR,
+		BrokerPort:     KAFKA_BROKER_PORT,
+		ControllerAddr: KAFKA_CONTROLLER_ADDR,
+		ControllerPort: KAFKA_CONTROLLER_PORT,
+	}, ks)
 	log.Println("start")
 	prestart := false
 	controller := false
@@ -87,6 +115,10 @@ func main() {
 		mc.ControllerTask()
 	} else if mongo {
 		mc.MemberTask()
+	} else if kafkaPrestart {
+		kc.PreStartTask(NODE_NAME)
+	} else if kafkaServer {
+		kc.MemberTask()
 	}
 	log.Println("Finish")
 
@@ -129,6 +161,36 @@ func configure() {
 	viper.SetDefault("cluster.size", 6)
 	viper.BindEnv("cluster.size", "CLUSTER_SIZE")
 
+	//kafka
+	viper.SetDefault("kafka.storageid", "")
+	viper.BindEnv("kafka.storageid", "KAFKA_STORAGE_ID")
+	viper.SetDefault("kafka.clusterid", "")
+	viper.BindEnv("kafka.clusterid", "KAFKA_CLUSTER_ID")
+	viper.SetDefault("kafka.datadir", "")
+	viper.BindEnv("kafka.datadir", "KAFKA_DATA_DIR")
+	viper.SetDefault("kafka.logdir", "")
+	viper.BindEnv("kafka.logdir", "KAFKA_LOG_DIR")
+	viper.SetDefault("kafka.metadir", "")
+	viper.BindEnv("kafka.metadir", "KAFKA_META_DIR")
+	viper.SetDefault("kafka.broker.addr", "")
+	viper.BindEnv("kafka.broker.addr", "KAFKA_BROKER_ADDR")
+	viper.SetDefault("kafka.broker.port", "")
+	viper.BindEnv("kafka.broker.port", "KAFKA_BROKER_PORT")
+	viper.SetDefault("kafka.controller.addr", "")
+	viper.BindEnv("kafka.controller.addr", "KAFKA_CONTROLLER_ADDR")
+	viper.SetDefault("kafka.controller.port", "")
+	viper.BindEnv("kafka.controller.port", "KAFKA_CONTROLLER_PORT")
+
+	KAFKA_CLUSTER_ID = viper.GetString("kafka.clusterid")
+	KAFKA_STORAGE_ID = viper.GetString("kafka.storageid")
+	KAFKA_DATA_DIR = viper.GetString("kafka.datadir")
+	KAFKA_LOG_DIR = viper.GetString("kafka.logdir")
+	KAFKA_META_DIR = viper.GetString("kafka.metadir")
+	KAFKA_BROKER_ADDR = viper.GetString("kafka.broker.addr")
+	KAFKA_BROKER_PORT = viper.GetString("kafka.broker.port")
+	KAFKA_CONTROLLER_ADDR = viper.GetString("kafka.controller.addr")
+	KAFKA_CONTROLLER_PORT = viper.GetString("kafka.controller.port")
+
 	NODE_ID = viper.GetString("node.id")
 	NODE_NAME = viper.GetString("node.name")
 	MONGO_RSNAME = viper.GetString("mongo.rsname")
@@ -148,7 +210,5 @@ func configure() {
 	QUROUM_SIZE = uint(CLUSTER_SIZE/2) + 1
 	conf, _ := json.MarshalIndent(viper.AllSettings(), " ", " ")
 	log.Println(string(conf))
-
-	KV_PATH = "status/mongo"
 
 }
