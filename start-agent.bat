@@ -76,6 +76,10 @@ set "CONSUL_HTTP_ADDR=http://%CSB_IP%:8500"
 set "MONGO_PORT=27017"
 set "MONGO_ADDR=%CSB_IP%"
 set "MONGO_LOCAL_ADDR=%CSB_IP%"
+set "KAFKA_BROKER_ADDR=%CSB_IP%"
+set "KAFKA_CONTROLLER_ADDR=%CSB_IP%"
+set "KAFKA_BROKER_PORT=9092"
+set "KAFKA_CONTROLLER_PORT=9093"
 
 rem =========================
 rem Kafka IDs (static map)
@@ -125,7 +129,7 @@ rem =========================
 rem Submit jobs
 rem =========================
 echo Starting mongo-control job...
-nomad run -detach "%CMS_ROOT%jobs\mongo\mongo-control.hcl" 1>>"%LOG_DIR%\nomad-%NODE_ID%.log" 2>>&1
+rem nomad run -detach "%CMS_ROOT%jobs\mongo\mongo-control.hcl" 1>>"%LOG_DIR%\nomad-%NODE_ID%.log" 2>>&1
 if errorlevel 1 (
   echo ERROR: nomad run failed. See "%LOG_DIR%\nomad-%NODE_ID%.log"
   goto :end
@@ -152,6 +156,13 @@ if errorlevel 1 (
 ) else (
   echo Prestart OK. Logs: "%LOG_DIR%\prestart-%NODE_ID%.log"
 )
+go run -C "%BASE%goctl" . -kafka-prestart 1>"%LOG_DIR%\kafka-prestart-%NODE_ID%.log" 2>&1
+if errorlevel 1 (
+  echo WARNING: go kafka-prestart exited with errors. See "%LOG_DIR%\kafka-prestart-%NODE_ID%.log"
+) else (
+  echo kafka-Prestart OK. Logs: "%LOG_DIR%\kafka-prestart-%NODE_ID%.log"
+)
+start cmd /k title Node-%NODE_ID%
 goto :end
 
 rem =========================

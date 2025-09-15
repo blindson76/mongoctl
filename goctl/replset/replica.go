@@ -1,10 +1,11 @@
 package replset
 
 import (
-	"example.com/goctl/store"
 	"log"
 	"slices"
 	"time"
+
+	"example.com/goctl/store"
 )
 
 type ReplicaSetStatus int
@@ -22,12 +23,19 @@ const (
 	ERROR
 )
 
-// replicaSetController definition remains unchanged
-type replicaSetController[
+type ReplicaController interface {
+	PreStartTask(id string)
+	ControllerTask()
+	MemberTask()
+}
+
+// replicaSetControl definition remains unchanged
+type replicaSetControl[
 	C store.CandidateReportType[C],
 	S any,
 	H store.HealtStatusType[H],
 ] struct {
+	ReplicaController
 	collector    controllerInterface[C, S, H]
 	name         string
 	replConfig   *S
@@ -40,7 +48,7 @@ type replicaSetController[
 	candidates   []C
 }
 
-func (rs *replicaSetController[
+func (rs *replicaSetControl[
 	C,
 	S,
 	H,
@@ -56,7 +64,7 @@ func (rs *replicaSetController[
 
 }
 
-func (rs *replicaSetController[
+func (rs *replicaSetControl[
 	C,
 	S,
 	H]) ControllerTask() {
@@ -74,14 +82,14 @@ func (rs *replicaSetController[
 		}
 	}
 }
-func (rs *replicaSetController[
+func (rs *replicaSetControl[
 	C,
 	S,
 	H]) MemberTask() {
 	configChan := rs.store.WatchReplSetConfig()
 	rs.collector.memberTask(configChan)
 }
-func (rs *replicaSetController[
+func (rs *replicaSetControl[
 	C,
 	S,
 	H]) handleCandidates(candidates []C) {
@@ -115,14 +123,14 @@ func (rs *replicaSetController[
 	}
 }
 
-func (rs *replicaSetController[
+func (rs *replicaSetControl[
 	C,
 	S,
 	H,
 ]) handleHealthStatus(healthStatus []H) {
 	log.Println(healthStatus)
 }
-func (rs *replicaSetController[C, S, H]) handleTimer(t time.Time) {
+func (rs *replicaSetControl[C, S, H]) handleTimer(t time.Time) {
 	log.Println("timer", t)
 	if rs.state == INITIATION {
 		panic("Replset Configuration timeout")

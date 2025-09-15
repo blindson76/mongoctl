@@ -2,16 +2,17 @@ package replset
 
 import (
 	"context"
-	"example.com/goctl/store"
-	"example.com/goctl/util"
 	"fmt"
-	"github.com/spf13/viper"
-	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"log"
 	"os"
 	"strings"
 	"time"
+
+	"example.com/goctl/store"
+	"example.com/goctl/util"
+	"github.com/spf13/viper"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type MongoCandidateReport struct {
@@ -44,7 +45,7 @@ func NewMongoController(mongoCfg MongoConfig, str store.Provider[MongoCandidateR
 	mc := &MongoController{
 		cfg: mongoCfg,
 	}
-	mc.replicaSetController = replicaSetController[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]{
+	mc.replicaSetControl = replicaSetControl[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]{
 		collector: mc,
 		store:     str,
 	}
@@ -98,7 +99,7 @@ type MongoReplSetSpec struct {
 
 type MongoController struct {
 	cfg MongoConfig
-	replicaSetController[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]
+	replicaSetControl[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]
 	mongo    *util.MongodMgm
 	mongoCli *util.MongoClient
 }

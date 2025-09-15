@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"example.com/goctl/replset"
-	store "example.com/goctl/store"
 	"flag"
-	capi "github.com/hashicorp/consul/api"
-	"github.com/spf13/viper"
 	"log"
 	"os"
 	"path/filepath"
+
+	"example.com/goctl/replset"
+	store "example.com/goctl/store"
+	capi "github.com/hashicorp/consul/api"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -53,7 +54,7 @@ var (
 func main() {
 	configure()
 
-	cs, _ := store.NewConsulStore[replset.MongoCandidateReport,
+	ms, _ := store.NewConsulStore[replset.MongoCandidateReport,
 		replset.MongoReplSetSpec,
 		replset.MongoHealthStatus,
 	](CONSUL_HTTP_ADDR, store.ConsulStoreConfig{
@@ -71,7 +72,7 @@ func main() {
 		NodeName:  NODE_NAME,
 		NodeID:    NODE_ID,
 		KeyFile:   MONGO_SECRET_FILE,
-	}, cs)
+	}, ms)
 	ks, _ := store.NewConsulStore[replset.KafkaCandidateReport,
 		replset.KafkaReplSetSpec,
 		replset.KafkaHealthStatus,
@@ -93,32 +94,27 @@ func main() {
 		ControllerAddr: KAFKA_CONTROLLER_ADDR,
 		ControllerPort: KAFKA_CONTROLLER_PORT,
 	}, ks)
-	log.Println("start")
-	prestart := false
-	controller := false
-	test := false
-	mongo := false
-	kafkaPrestart := false
-	kafkaServer := false
-	flag.BoolVar(&prestart, "prestart", false, "")
-	flag.BoolVar(&controller, "controller", false, "")
-	flag.BoolVar(&mongo, "mongo", false, "")
-	flag.BoolVar(&test, "test", false, "")
-	flag.BoolVar(&kafkaPrestart, "kafka-prestart", false, "")
-	flag.BoolVar(&kafkaServer, "kafka-server", false, "")
+	replType := ""
+	taskType := ""
+	flag.StringVar(&replType, "type", "test", "repl type: kafka|mongo")
+	flag.StringVar(&taskType, "task", "test", "task type: prestart|controller|member")
 	flag.Parse()
+	var ctrl replset.ReplicaController
 
-	if prestart {
-		log.Println("start prestart task")
-		mc.PreStartTask(NODE_NAME)
-	} else if controller {
-		mc.ControllerTask()
-	} else if mongo {
-		mc.MemberTask()
-	} else if kafkaPrestart {
-		kc.PreStartTask(NODE_NAME)
-	} else if kafkaServer {
-		kc.MemberTask()
+	switch replType {
+	case "kafka":
+		ctrl = kc
+	case "mongo":
+		ctrl = mc
+	}
+	switch taskType {
+	case "prestart":
+		ctrl.PreStartTask(NODE_NAME)
+	case "controller":
+		ctrl.ControllerTask()
+	case "member":
+		log.Println("Starting member task")
+		ctrl.MemberTask()
 	}
 	log.Println("Finish")
 
