@@ -12,21 +12,21 @@ job "kafka-job" {
     }
 
 
-    task "kafka-prestart" {
-      env {
-      }
-
-      driver = "raw_exec"
-      config {
-        command = "go"
-        args = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-kafka-prestart"]
-      }
-
-      lifecycle {
-        hook = "prestart"
-        sidecar = false
-      }
-    }
+    # task "kafka-prestart" {
+    #   env {
+    #   }
+    #
+    #   driver = "raw_exec"
+    #   config {
+    #     command = "go"
+    #     args = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-type", "kafka", "-task", "controller"]
+    #   }
+    #
+    #   lifecycle {
+    #     hook = "prestart"
+    #     sidecar = false
+    #   }
+    # }
 
     task "kafka-task" {
 
@@ -53,7 +53,7 @@ job "kafka-job" {
       driver = "raw_exec"
       config {
         command = "go"
-        args = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-kafka-server"]
+        args = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-type", "kafka", "-task", "controller"]
       }
 
     }

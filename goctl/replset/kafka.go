@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,7 @@ type KafkaReplSetSpec struct {
 	BootstrapServers        string
 	BootstrapServersStorage string
 	ClusterID               string
+	Members                 []string
 }
 
 type KafkaHealthStatus struct {
@@ -85,7 +87,9 @@ type KafkaConfig struct {
 }
 type KafkaController struct {
 	replicaSetControl[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]
-	cfg KafkaConfig
+	cfg   KafkaConfig
+	proc  *os.Process
+	state KafkaState
 }
 
 func NewKafkaController(cfg KafkaConfig, str store.Provider[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]) *KafkaController {
@@ -98,6 +102,15 @@ func NewKafkaController(cfg KafkaConfig, str store.Provider[KafkaCandidateReport
 	}
 	return mc
 }
+
+type KafkaState int
+
+const (
+	KAFKA_INITIAL KafkaState = iota
+	KAFKA_STARTUP
+	KAFKA_FAILED
+)
+
 func (k KafkaController) collect() (*KafkaCandidateReport, error) {
 	report := &KafkaCandidateReport{
 		ControllerAddr: k.cfg.BrokerAddr,
@@ -119,48 +132,77 @@ func (k KafkaController) collect() (*KafkaCandidateReport, error) {
 func (k KafkaController) generateReplConfig(cs []KafkaCandidateReport) *KafkaReplSetSpec {
 	bootstrapServers := []string{}
 	bootstrapServersStorage := []string{}
+	members := []string{}
 	for _, m := range cs {
 		bootstrapServers = append(bootstrapServers, fmt.Sprintf("%s:%s", m.ControllerAddr, m.ControllerPort))
 		bootstrapServersStorage = append(bootstrapServersStorage, fmt.Sprintf("%s@%s:%s:%s", m.NodeID, m.ControllerAddr, m.ControllerPort, m.StorageID))
+		members = append(members, m.NodeName)
 	}
-	return &KafkaReplSetSpec{BootstrapServers: strings.Join(bootstrapServers, ","), BootstrapServersStorage: strings.Join(bootstrapServersStorage, ",")}
+	return &KafkaReplSetSpec{
+		BootstrapServers:        strings.Join(bootstrapServers, ","),
+		BootstrapServersStorage: strings.Join(bootstrapServersStorage, ","),
+		ClusterID:               k.cfg.ClusterID,
+		Members:                 members,
+	}
 }
 
 func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealthStatus {
 	log.Println("Member task started")
 	out := make(chan KafkaHealthStatus, 1)
-	defer close(out)
-	for spec := range s {
-		log.Println("Read new replset config", spec)
-		cfgFile, err := k.createConfigFile(spec)
-		if err != nil {
-			log.Println("create config file error:", err)
-			continue
-		}
-		if err := k.formatStorage(spec); err != nil {
-			log.Println("Format storage error", err)
-			continue
-		}
+	var exitChan chan *os.ProcessState
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case spec := <-s:
 
-		if err := k.startServer(cfgFile); err != nil {
-			log.Println("Server start error", err)
-			continue
-		}
+				log.Println("Read new replset config", spec)
+				inReplset := slices.Contains(spec.Members, k.cfg.NodeName)
+				if inReplset && k.state == KAFKA_INITIAL {
+					log.Println("Joining to replicaset")
+					cfgFile, err := k.createConfigFile(spec)
+					if err != nil {
+						log.Println("create config file error:", err)
+						continue
+					}
+					if err := k.formatStorage(spec); err != nil {
+						log.Println("Format storage error", err)
+						continue
+					}
 
-		out <- KafkaHealthStatus{
-			NodeName: k.cfg.NodeName,
-			NodeId:   k.cfg.NodeID,
-			Status:   "healthy",
+					if ch, err := k.startServer(cfgFile); err != nil {
+						log.Println("Server start error", err)
+						continue
+					} else {
+						exitChan = ch
+						k.state = KAFKA_STARTUP
+					}
+
+				} else if !inReplset && k.state != KAFKA_INITIAL {
+					log.Panicln("removing from replicaset")
+				}
+				out <- KafkaHealthStatus{
+					NodeName: k.cfg.NodeName,
+					NodeId:   k.cfg.NodeID,
+					Status:   "healthy",
+				}
+			case exitState := <-exitChan:
+				log.Println("Kafka exited", exitState)
+				break
+			}
+
 		}
-	}
+	}()
 	return out
 }
 func (k KafkaController) formatStorage(s KafkaReplSetSpec) error {
 	cfgFile := normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "server.properties"))
 	env := baseEnv()
 	env = append(env, fmt.Sprintf("LOG_DIR=%s", normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "kafka-logs"))))
+	args := []string{"/c", "kafka-storage.bat", "format", "-t", s.ClusterID, "-c", cfgFile, "--initial-controllers", s.BootstrapServersStorage}
+	log.Println("Runnig kafka-storage.bat with:", args)
 
-	cmd := exec.Command("cmd", "/c", "kafka-storage.bat", "format", "-t", s.ClusterID, "-c", cfgFile, "--initial-controllers", s.BootstrapServersStorage)
+	cmd := exec.Command("cmd", args...)
 	cmd.Env = env
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -202,16 +244,18 @@ func (k KafkaController) createConfigFile(s KafkaReplSetSpec) (string, error) {
 	log.Println("Wrote configuration:", cfgFile)
 	return cfgFile, nil
 }
-func (k KafkaController) startServer(cfgFile string) error {
+func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, error) {
 	env := baseEnv()
 	env = append(env, fmt.Sprintf("LOG_DIR=%s", normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "kafka-logs"))))
 	cmd := exec.Command("cmd", "/c", "kafka-server-start.bat", cfgFile)
 	cmd.Env = env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// cmd.Stdout = os.Stdout
+	// cmd.Stderr = os.Stderr
+
+	exitChan := make(chan *os.ProcessState, 1)
 
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// graceful shutdown
@@ -229,8 +273,14 @@ func (k KafkaController) startServer(cfgFile string) error {
 		time.Sleep(5 * time.Second)
 		_ = cmd.Process.Kill()
 	}()
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Println("kafka exited with error", cmd.ProcessState)
+		}
+		exitChan <- cmd.ProcessState
+	}()
 
-	return nil
+	return exitChan, nil
 
 }
 

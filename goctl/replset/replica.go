@@ -86,8 +86,11 @@ func (rs *replicaSetControl[
 	C,
 	S,
 	H]) MemberTask() {
-	configChan := rs.store.WatchReplSetConfig()
-	rs.collector.memberTask(configChan)
+	healthCh := rs.collector.memberTask(rs.store.WatchReplSetConfig())
+	for health := range healthCh {
+		rs.store.UpdateHealthStatus(rs.name, health)
+	}
+	log.Println("Done member task")
 }
 func (rs *replicaSetControl[
 	C,
