@@ -2,6 +2,7 @@ package replset
 
 import (
 	"fmt"
+	"github.com/segmentio/kafka-go"
 	"html/template"
 	"log"
 	"os"
@@ -153,6 +154,7 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 	go func() {
 		defer close(out)
 		for {
+			log.Println("waiting event")
 			select {
 			case spec := <-s:
 
@@ -169,6 +171,7 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 						log.Println("Format storage error", err)
 						continue
 					}
+					log.Println("Starting kafka-server")
 
 					if ch, err := k.startServer(cfgFile); err != nil {
 						log.Println("Server start error", err)
@@ -210,6 +213,7 @@ func (k KafkaController) formatStorage(s KafkaReplSetSpec) error {
 	} else {
 		log.Println("storage out:", string(out))
 	}
+	log.Println("proc state:", cmd.ProcessState)
 	return nil
 
 }
@@ -272,12 +276,43 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 		_ = cmd.Process.Signal(os.Interrupt)
 		time.Sleep(5 * time.Second)
 		_ = cmd.Process.Kill()
+		os.Exit(0)
 	}()
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			log.Println("kafka exited with error", cmd.ProcessState)
 		}
 		exitChan <- cmd.ProcessState
+	}()
+
+	go func() {
+		for {
+			log.Println("Connecting kafka")
+			conn, err := kafka.Dial("tcp", fmt.Sprintf("%s:%s", k.cfg.BrokerAddr, k.cfg.BrokerPort))
+			if err != nil {
+				log.Println("kafka dial error")
+				time.Sleep(3 * time.Second)
+				continue
+			}
+			for {
+
+				if brokers, err := conn.Brokers(); err != nil {
+					log.Println("kafka brokers error")
+					time.Sleep(3 * time.Second)
+					break
+				} else {
+					log.Println("Brokers", brokers)
+				}
+				if controller, err := conn.Controller(); err != nil {
+					log.Println("kafka brokers error")
+					time.Sleep(3 * time.Second)
+					break
+				} else {
+					log.Println("Controller", controller)
+				}
+				time.Sleep(5 * time.Second)
+			}
+		}
 	}()
 
 	return exitChan, nil
