@@ -39,6 +39,8 @@ var (
 	KAFKA_CONTROLLER_ADDR string
 	KAFKA_BROKER_PORT     string
 	KAFKA_CONTROLLER_PORT string
+
+	JOB_FILE string
 )
 var (
 	cli   *capi.Client
@@ -93,7 +95,7 @@ func main() {
 		BrokerPort:     KAFKA_BROKER_PORT,
 		ControllerAddr: KAFKA_CONTROLLER_ADDR,
 		ControllerPort: KAFKA_CONTROLLER_PORT,
-	}, ks)
+	}, JOB_FILE, ks)
 	replType := ""
 	taskType := ""
 	flag.StringVar(&replType, "type", "test", "repl type: kafka|mongo")
@@ -111,10 +113,10 @@ func main() {
 	case "prestart":
 		ctrl.PreStartTask(NODE_NAME)
 	case "controller":
-		ctrl.ControllerTask()
+		ctrl.ControllerTask(JOB_FILE)
 	case "member":
 		log.Println("Starting member task")
-		ctrl.MemberTask()
+		ctrl.MemberTask(NODE_NAME)
 	}
 	log.Println("Finish")
 
@@ -156,6 +158,9 @@ func configure() {
 
 	viper.SetDefault("cluster.size", 6)
 	viper.BindEnv("cluster.size", "CLUSTER_SIZE")
+
+	viper.SetDefault("job.file", "")
+	viper.BindEnv("job.file", "JOB_FILE")
 
 	//kafka
 	viper.SetDefault("kafka.storageid", "")
@@ -201,6 +206,8 @@ func configure() {
 
 	NOMAD_ADDR = viper.GetString("nomad.addr")
 	CONSUL_HTTP_ADDR = viper.GetString("consul.http.addr")
+
+	JOB_FILE = viper.GetString("job.file")
 
 	CLUSTER_SIZE = viper.GetUint("cluster.size")
 	QUROUM_SIZE = uint(CLUSTER_SIZE/2) + 1

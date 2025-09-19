@@ -1,16 +1,29 @@
+
+variable "replica-count" {
+  type = number
+  default = 1
+}
+variable "replica-members" {
+  type = string
+  default = ""
+}
 job "kafka-job" {
 
   type = "service"
   datacenters = ["*"]
 
   group "kafka-group" {
-    count = 3
+    count = var.replica-count
 
     constraint {
       operator = "distinct_hosts"
       value    = "true"
     }
-
+    constraint {
+      attribute = "${node.unique.name}"
+      operator = "set_contains_any"
+      value = var.replica-members
+    }
 
     # task "kafka-prestart" {
     #   env {
@@ -53,7 +66,7 @@ job "kafka-job" {
       driver = "raw_exec"
       config {
         command = "go"
-        args = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-type", "kafka", "-task", "controller"]
+        args = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-type", "kafka", "-task", "member"]
       }
 
     }

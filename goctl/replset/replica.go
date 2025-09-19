@@ -2,10 +2,13 @@ package replset
 
 import (
 	"log"
+	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"example.com/goctl/store"
+	napi "github.com/hashicorp/nomad/api"
 )
 
 type ReplicaSetStatus int
@@ -13,6 +16,7 @@ type controllerInterface[C, S, H any] interface {
 	collect() (*C, error)
 	generateReplConfig([]C) *S
 	memberTask(<-chan S) <-chan H
+	jobArgs(*S) []string
 }
 
 const (
@@ -25,27 +29,25 @@ const (
 
 type ReplicaController interface {
 	PreStartTask(id string)
-	ControllerTask()
-	MemberTask()
+	ControllerTask(string)
+	MemberTask(string)
 }
 
 // replicaSetControl definition remains unchanged
 type replicaSetControl[
-	C store.CandidateReportType[C],
-	S any,
-	H store.HealtStatusType[H],
+C store.CandidateReportType[C],
+S any,
+H store.HealtStatusType[H],
 ] struct {
 	ReplicaController
-	collector    controllerInterface[C, S, H]
-	name         string
-	replConfig   *S
-	reports      []C
-	healthStatus []H
-	store        store.Provider[C, S, H]
-	ch           chan string
-	state        ReplicaSetStatus
-	timer        *time.Timer
-	candidates   []C
+	collector  controllerInterface[C, S, H]
+	name       string
+	store      store.Provider[C, S, H]
+	ch         chan string
+	state      ReplicaSetStatus
+	timer      *time.Timer
+	candidates []C
+	jobFile    string
 }
 
 func (rs *replicaSetControl[
@@ -67,7 +69,8 @@ func (rs *replicaSetControl[
 func (rs *replicaSetControl[
 	C,
 	S,
-	H]) ControllerTask() {
+	H]) ControllerTask(jobFile string) {
+	rs.jobFile = jobFile
 	rs.timer = time.NewTimer(5 * time.Minute)
 	candidatesChan := rs.store.WatchCandidateReports()
 	healthStatusChan := rs.store.WatchHealthStatus()
@@ -85,10 +88,10 @@ func (rs *replicaSetControl[
 func (rs *replicaSetControl[
 	C,
 	S,
-	H]) MemberTask() {
+	H]) MemberTask(id string) {
 	healthCh := rs.collector.memberTask(rs.store.WatchReplSetConfig())
 	for health := range healthCh {
-		rs.store.UpdateHealthStatus(rs.name, health)
+		rs.store.UpdateHealthStatus(id, health)
 	}
 	log.Println("Done member task")
 }
@@ -141,13 +144,51 @@ func (rs *replicaSetControl[C, S, H]) handleTimer(t time.Time) {
 		log.Println("here we publish initial configuration")
 		sortCandidates(rs.candidates)
 		replCfg := rs.collector.generateReplConfig(rs.candidates)
-		err := rs.store.UpdateReplSetConfig(replCfg)
+		err := rs.publishReplSpec(replCfg)
 		if err != nil {
+			log.Println("Error publishing repl spec:", err)
 			return
 		}
+
 		//rs.
 
 	}
+}
+func (rs *replicaSetControl[C, S, H]) publishReplSpec(spec *S) error {
+
+	log.Println("Publishing new replset configuration")
+	err := rs.store.UpdateReplSetConfig(spec)
+	if err != nil {
+		return err
+	}
+	vars := rs.collector.jobArgs(spec)
+	log.Println("vars", vars)
+
+	client, err := napi.NewClient(&napi.Config{
+		Address:  "http://10.10.51.1:14646",
+		WaitTime: 5 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	varsStr := strings.Join(vars, "\n")
+	log.Println("varStr", varsStr)
+	hclStr, err := os.ReadFile(rs.jobFile)
+	hcl, err := client.Jobs().ParseHCLOpts(&napi.JobsParseRequest{
+		JobHCL:       string(hclStr),
+		Variables:    varsStr,
+		Canonicalize: false,
+	})
+	if err != nil {
+		return err
+	}
+	_, _, err = client.Jobs().Register(hcl, nil)
+	if err != nil {
+		return err
+	}
+	log.Println("Job deploy succeed")
+	return nil
+
 }
 
 func sortCandidates[T store.Orderable[T]](candidates []T) {

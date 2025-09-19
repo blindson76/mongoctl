@@ -138,25 +138,25 @@ if errorlevel 1 (
 )
 
 echo Starting kafka job...
-nomad run -detach "%CMS_ROOT%jobs\kafka\kafka.hcl" 1>>"%LOG_DIR%\kafka-%NODE_ID%.log" 2>>&1
+rem nomad run -detach "%CMS_ROOT%jobs\kafka\kafka.hcl" 1>>"%LOG_DIR%\kafka-%NODE_ID%.log" 2>>&1
 if errorlevel 1 (
   echo ERROR: nomad run failed. See "%LOG_DIR%\nomad-%NODE_ID%.log"
   goto :end
 ) else (
   echo kafka submitted.
 )
-
+set JOB_FILE=D:\works\mongoctl\jobs\kafka\kafka.hcl
 rem =========================
 rem Prestart (Go helper)
 rem =========================
 echo Running prestart (Go)...
-go run -C "%BASE%goctl" . -prestart 1>"%LOG_DIR%\prestart-%NODE_ID%.log" 2>&1
+go run -C "%BASE%goctl" . -type mongo -task prestart 1>"%LOG_DIR%\prestart-%NODE_ID%.log" 2>&1
 if errorlevel 1 (
   echo WARNING: go prestart exited with errors. See "%LOG_DIR%\prestart-%NODE_ID%.log"
 ) else (
   echo Prestart OK. Logs: "%LOG_DIR%\prestart-%NODE_ID%.log"
 )
-go run -C "%BASE%goctl" . -kafka-prestart 1>"%LOG_DIR%\kafka-prestart-%NODE_ID%.log" 2>&1
+go run -C "%BASE%goctl" . -type kafka -task prestart 1>"%LOG_DIR%\kafka-prestart-%NODE_ID%.log" 2>&1
 if errorlevel 1 (
   echo WARNING: go kafka-prestart exited with errors. See "%LOG_DIR%\kafka-prestart-%NODE_ID%.log"
 ) else (

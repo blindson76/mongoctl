@@ -104,7 +104,7 @@ type MongoController struct {
 	mongoCli *util.MongoClient
 }
 
-func (m MongoController) generateReplConfig(candidates []MongoCandidateReport) *MongoReplSetSpec {
+func (m *MongoController) generateReplConfig(candidates []MongoCandidateReport) *MongoReplSetSpec {
 	memberStr := []string{}
 	for _, m := range candidates {
 		memberStr = append(memberStr, fmt.Sprintf("%s:%s:%s:%s", m.NodeId, m.NodeName, m.MongoAddr, m.MongoPort))
@@ -123,7 +123,7 @@ func (m MongoController) generateReplConfig(candidates []MongoCandidateReport) *
 	}
 	return mongoCfg
 }
-func (m MongoController) collect() (*MongoCandidateReport, error) {
+func (m *MongoController) collect() (*MongoCandidateReport, error) {
 	mongod := util.MongodMgm{
 		DBPath:   m.cfg.DBPath,
 		BindIp:   m.cfg.LocalAddr,
@@ -197,8 +197,13 @@ func (m MongoController) collect() (*MongoCandidateReport, error) {
 	log.Println("Exiting mongod:", mongod.ShutdownWithTimeout(3*time.Second))
 	return status, nil
 }
+func (m *MongoController) jobArgs(spec *MongoReplSetSpec) []string {
+	var args []string
 
-func (m MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan MongoHealthStatus {
+	return args
+
+}
+func (m *MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan MongoHealthStatus {
 	log.Println("member controller")
 	out := make(chan MongoHealthStatus, 1)
 	go func() {

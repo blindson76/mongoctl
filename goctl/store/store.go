@@ -3,10 +3,11 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	capi "github.com/hashicorp/consul/api"
 	"log"
 	"path"
 	"time"
+
+	capi "github.com/hashicorp/consul/api"
 )
 
 type Unique[T any] interface {

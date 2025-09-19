@@ -2,7 +2,6 @@ package replset
 
 import (
 	"fmt"
-	"github.com/segmentio/kafka-go"
 	"html/template"
 	"log"
 	"os"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 
 	"example.com/goctl/store"
 )
@@ -88,18 +89,20 @@ type KafkaConfig struct {
 }
 type KafkaController struct {
 	replicaSetControl[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]
-	cfg   KafkaConfig
-	proc  *os.Process
-	state KafkaState
+	cfg        KafkaConfig
+	proc       *os.Process
+	state      KafkaState
+	healthChan chan KafkaHealthStatus
 }
 
-func NewKafkaController(cfg KafkaConfig, str store.Provider[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]) *KafkaController {
+func NewKafkaController(cfg KafkaConfig, jobFile string, str store.Provider[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]) *KafkaController {
 	mc := &KafkaController{
 		cfg: cfg,
 	}
 	mc.replicaSetControl = replicaSetControl[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]{
 		collector: mc,
 		store:     str,
+		jobFile:   jobFile,
 	}
 	return mc
 }
@@ -107,9 +110,9 @@ func NewKafkaController(cfg KafkaConfig, str store.Provider[KafkaCandidateReport
 type KafkaState int
 
 const (
-	KAFKA_INITIAL KafkaState = iota
-	KAFKA_STARTUP
-	KAFKA_FAILED
+	KafkaInitial KafkaState = iota
+	KafkaStartup
+	KafkaFailed
 )
 
 func (k KafkaController) collect() (*KafkaCandidateReport, error) {
@@ -129,7 +132,14 @@ func (k KafkaController) collect() (*KafkaCandidateReport, error) {
 	return report, nil
 
 }
+func (k KafkaController) jobArgs(spec *KafkaReplSetSpec) []string {
 
+	return []string{
+		fmt.Sprintf("replica-count=%d", len(spec.Members)),
+		fmt.Sprintf("replica-members=\"%s\"", strings.Join(spec.Members, ",")),
+	}
+
+}
 func (k KafkaController) generateReplConfig(cs []KafkaCandidateReport) *KafkaReplSetSpec {
 	bootstrapServers := []string{}
 	bootstrapServersStorage := []string{}
@@ -149,10 +159,10 @@ func (k KafkaController) generateReplConfig(cs []KafkaCandidateReport) *KafkaRep
 
 func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealthStatus {
 	log.Println("Member task started")
-	out := make(chan KafkaHealthStatus, 1)
+	k.healthChan = make(chan KafkaHealthStatus, 1)
 	var exitChan chan *os.ProcessState
 	go func() {
-		defer close(out)
+		defer close(k.healthChan)
 		for {
 			log.Println("waiting event")
 			select {
@@ -160,7 +170,7 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 
 				log.Println("Read new replset config", spec)
 				inReplset := slices.Contains(spec.Members, k.cfg.NodeName)
-				if inReplset && k.state == KAFKA_INITIAL {
+				if inReplset && k.state == KafkaInitial {
 					log.Println("Joining to replicaset")
 					cfgFile, err := k.createConfigFile(spec)
 					if err != nil {
@@ -178,16 +188,11 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 						continue
 					} else {
 						exitChan = ch
-						k.state = KAFKA_STARTUP
+						k.state = KafkaStartup
 					}
 
-				} else if !inReplset && k.state != KAFKA_INITIAL {
+				} else if !inReplset && k.state != KafkaInitial {
 					log.Panicln("removing from replicaset")
-				}
-				out <- KafkaHealthStatus{
-					NodeName: k.cfg.NodeName,
-					NodeId:   k.cfg.NodeID,
-					Status:   "healthy",
 				}
 			case exitState := <-exitChan:
 				log.Println("Kafka exited", exitState)
@@ -196,7 +201,7 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 
 		}
 	}()
-	return out
+	return k.healthChan
 }
 func (k KafkaController) formatStorage(s KafkaReplSetSpec) error {
 	cfgFile := normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "server.properties"))
@@ -282,6 +287,7 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 		if err := cmd.Wait(); err != nil {
 			log.Println("kafka exited with error", cmd.ProcessState)
 		}
+		log.Println("Kafka exited", cmd.ProcessState)
 		exitChan <- cmd.ProcessState
 	}()
 
@@ -290,6 +296,11 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 			log.Println("Connecting kafka")
 			conn, err := kafka.Dial("tcp", fmt.Sprintf("%s:%s", k.cfg.BrokerAddr, k.cfg.BrokerPort))
 			if err != nil {
+				k.healthChan <- KafkaHealthStatus{
+					NodeName: k.cfg.NodeName,
+					NodeId:   k.cfg.NodeID,
+					Status:   "Disconnected",
+				}
 				log.Println("kafka dial error")
 				time.Sleep(3 * time.Second)
 				continue
@@ -298,6 +309,11 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 
 				if brokers, err := conn.Brokers(); err != nil {
 					log.Println("kafka brokers error")
+					k.healthChan <- KafkaHealthStatus{
+						NodeName: k.cfg.NodeName,
+						NodeId:   k.cfg.NodeID,
+						Status:   "BrokerErr",
+					}
 					time.Sleep(3 * time.Second)
 					break
 				} else {
@@ -305,10 +321,20 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 				}
 				if controller, err := conn.Controller(); err != nil {
 					log.Println("kafka brokers error")
+					k.healthChan <- KafkaHealthStatus{
+						NodeName: k.cfg.NodeName,
+						NodeId:   k.cfg.NodeID,
+						Status:   "ControllerErr",
+					}
 					time.Sleep(3 * time.Second)
 					break
 				} else {
 					log.Println("Controller", controller)
+				}
+				k.healthChan <- KafkaHealthStatus{
+					NodeName: k.cfg.NodeName,
+					NodeId:   k.cfg.NodeID,
+					Status:   "OK",
 				}
 				time.Sleep(5 * time.Second)
 			}
