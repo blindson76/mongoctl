@@ -60,8 +60,8 @@ func (m *MongoController) checkWipeRequirment(replConfig MongoReplSetSpec, membe
 		log.Println("replset name different")
 		return true
 	} else if replConfig.OpLogFirstSec > uint32(memberCfg.OpLogLastInc) {
-		log.Println("oplogs too far")
-		return true
+		log.Println("oplogs too far", replConfig.OpLogFirstSec, uint32(memberCfg.OpLogLastInc))
+		return false
 	}
 	log.Println("wipe not required id different")
 	return false

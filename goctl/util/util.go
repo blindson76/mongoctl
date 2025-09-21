@@ -112,6 +112,20 @@ func (m *MongodMgm) ShutdownWithTimeout(d time.Duration) *os.ProcessState {
 	return pstate
 }
 
+func (m *MongodMgm) Repair() error {
+	cmd := exec.Command("mongod", "--dbpath", m.DBPath, "--repair")
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		return err
+	}
+	log.Println("repair exit status:", cmd.ProcessState.ExitCode())
+	if cmd.ProcessState.ExitCode() != 0 {
+		return fmt.Errorf("mongo repair failed:%d", cmd.ProcessState.ExitCode())
+	}
+	return nil
+
+}
+
 type MongoClient struct {
 	serverIp   string
 	serverPort string

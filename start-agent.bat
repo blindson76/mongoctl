@@ -129,7 +129,7 @@ rem =========================
 rem Submit jobs
 rem =========================
 echo Starting mongo-control job...
-rem nomad run -detach "%CMS_ROOT%jobs\mongo\mongo-control.hcl" 1>>"%LOG_DIR%\nomad-%NODE_ID%.log" 2>>&1
+nomad run -detach "%CMS_ROOT%jobs\mongo\mongo-control.hcl" 1>>"%LOG_DIR%\nomad-%NODE_ID%.log" 2>>&1
 if errorlevel 1 (
   echo ERROR: nomad run failed. See "%LOG_DIR%\nomad-%NODE_ID%.log"
   goto :end
@@ -138,14 +138,13 @@ if errorlevel 1 (
 )
 
 echo Starting kafka job...
-rem nomad run -detach "%CMS_ROOT%jobs\kafka\kafka.hcl" 1>>"%LOG_DIR%\kafka-%NODE_ID%.log" 2>>&1
+nomad run -detach "%CMS_ROOT%jobs\kafka\kafka-control.hcl" 1>>"%LOG_DIR%\kafka-%NODE_ID%.log" 2>>&1
 if errorlevel 1 (
   echo ERROR: nomad run failed. See "%LOG_DIR%\nomad-%NODE_ID%.log"
   goto :end
 ) else (
   echo kafka submitted.
 )
-set JOB_FILE=D:\works\mongoctl\jobs\kafka\kafka.hcl
 rem =========================
 rem Prestart (Go helper)
 rem =========================

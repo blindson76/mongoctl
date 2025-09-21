@@ -54,6 +54,14 @@ var (
 )
 
 func main() {
+	replType := ""
+	taskType := ""
+	flag.StringVar(&replType, "type", "test", "repl type: kafka|mongo")
+	flag.StringVar(&taskType, "task", "test", "task type: prestart|controller|member")
+	jobFile := flag.String("jobFile", "", "")
+
+	flag.Parse()
+	JOB_FILE = *jobFile
 	configure()
 
 	ms, _ := store.NewConsulStore[replset.MongoCandidateReport,
@@ -74,7 +82,7 @@ func main() {
 		NodeName:  NODE_NAME,
 		NodeID:    NODE_ID,
 		KeyFile:   MONGO_SECRET_FILE,
-	}, ms)
+	}, NOMAD_ADDR, JOB_FILE, ms)
 	ks, _ := store.NewConsulStore[replset.KafkaCandidateReport,
 		replset.KafkaReplSetSpec,
 		replset.KafkaHealthStatus,
@@ -95,12 +103,7 @@ func main() {
 		BrokerPort:     KAFKA_BROKER_PORT,
 		ControllerAddr: KAFKA_CONTROLLER_ADDR,
 		ControllerPort: KAFKA_CONTROLLER_PORT,
-	}, JOB_FILE, ks)
-	replType := ""
-	taskType := ""
-	flag.StringVar(&replType, "type", "test", "repl type: kafka|mongo")
-	flag.StringVar(&taskType, "task", "test", "task type: prestart|controller|member")
-	flag.Parse()
+	}, NOMAD_ADDR, JOB_FILE, ks)
 	var ctrl replset.ReplicaController
 
 	switch replType {
@@ -159,8 +162,7 @@ func configure() {
 	viper.SetDefault("cluster.size", 6)
 	viper.BindEnv("cluster.size", "CLUSTER_SIZE")
 
-	viper.SetDefault("job.file", "")
-	viper.BindEnv("job.file", "JOB_FILE")
+	viper.SetDefault("job.file", JOB_FILE)
 
 	//kafka
 	viper.SetDefault("kafka.storageid", "")
@@ -206,8 +208,6 @@ func configure() {
 
 	NOMAD_ADDR = viper.GetString("nomad.addr")
 	CONSUL_HTTP_ADDR = viper.GetString("consul.http.addr")
-
-	JOB_FILE = viper.GetString("job.file")
 
 	CLUSTER_SIZE = viper.GetUint("cluster.size")
 	QUROUM_SIZE = uint(CLUSTER_SIZE/2) + 1

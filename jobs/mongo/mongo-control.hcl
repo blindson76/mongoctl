@@ -15,7 +15,7 @@ job "mongo-control-job" {
       driver = "raw_exec"
       config {
           command = "go"
-          args    = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-controller"]
+        args    = ["run", "-C", "${env.CMS_ROOT}\\goctl", ".", "-type","mongo","-task","controller","-jobFile","${env.CMS_ROOT}/jobs/mongo/mongo.hcl"]
       }
 
     }

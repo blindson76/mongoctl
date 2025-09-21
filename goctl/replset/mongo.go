@@ -41,13 +41,15 @@ type MongoConfig struct {
 	KeyFile   string
 }
 
-func NewMongoController(mongoCfg MongoConfig, str store.Provider[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]) *MongoController {
+func NewMongoController(mongoCfg MongoConfig, nomadAddr, jobFile string, str store.Provider[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]) *MongoController {
 	mc := &MongoController{
 		cfg: mongoCfg,
 	}
 	mc.replicaSetControl = replicaSetControl[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]{
 		collector: mc,
 		store:     str,
+		nomadAddr: nomadAddr,
+		jobFile:   jobFile,
 	}
 	return mc
 }
@@ -94,7 +96,16 @@ type MongoReplSetSpec struct {
 	OpLogFirstSec uint32 `json:"OpLogFirstSec"`
 	OpLogFirstInc uint32 `json:"OpLogFirstInc"`
 	OpLogLastSec  uint32 `json:"OpLogLastSec"`
-	OpLogLasttInc uint32 `json:"OpLogLasttInc"`
+	OpLogLasttInc uint32 `json:"OpLogLastInc"`
+}
+
+func (m MongoReplSetSpec) GetMembers() []string {
+	var members []string
+	for _, m := range strings.Split(m.Members, ",") {
+		tokens := strings.Split(m, ":")
+		members = append(members, tokens[1])
+	}
+	return members
 }
 
 type MongoController struct {
@@ -104,13 +115,13 @@ type MongoController struct {
 	mongoCli *util.MongoClient
 }
 
-func (m *MongoController) generateReplConfig(candidates []MongoCandidateReport) *MongoReplSetSpec {
+func (m *MongoController) generateReplConfig(candidates []MongoCandidateReport) MongoReplSetSpec {
 	memberStr := []string{}
 	for _, m := range candidates {
 		memberStr = append(memberStr, fmt.Sprintf("%s:%s:%s:%s", m.NodeId, m.NodeName, m.MongoAddr, m.MongoPort))
 	}
 
-	mongoCfg := &MongoReplSetSpec{
+	mongoCfg := MongoReplSetSpec{
 		Primary:       candidates[0].NodeName,
 		Count:         len(candidates),
 		ReplSetId:     candidates[0].ReplSetId,
@@ -124,12 +135,27 @@ func (m *MongoController) generateReplConfig(candidates []MongoCandidateReport) 
 	return mongoCfg
 }
 func (m *MongoController) collect() (*MongoCandidateReport, error) {
+	report, err := m.getOfflineStatus()
+	if err != nil {
+		log.Println("get offlinestatus err", err)
+		log.Println("trying wipe db")
+		if err := m.wipeDB(); err != nil {
+			log.Println("wipe error", err)
+		}
+		return m.getOfflineStatus()
+	}
+	return report, err
+}
+func (m *MongoController) getOfflineStatus() (*MongoCandidateReport, error) {
+
+	var exitState *os.ProcessState
 	mongod := util.MongodMgm{
 		DBPath:   m.cfg.DBPath,
 		BindIp:   m.cfg.LocalAddr,
 		BindPort: m.cfg.LocalPort,
 		OnExit: func(state *os.ProcessState) {
-			log.Println("mongod exitedd", state)
+			log.Println("mongod exited", state)
+			exitState = state
 		},
 	}
 	err := mongod.Start()
@@ -141,6 +167,21 @@ func (m *MongoController) collect() (*MongoCandidateReport, error) {
 	if err = mongoCli.ConnectWithOptions(func(opts *options.ClientOptions) *options.ClientOptions {
 		return opts.SetConnectTimeout(15 * time.Second).SetServerSelectionTimeout(15 * time.Second).SetDirect(true)
 	}); err != nil {
+		log.Println("mongo connect error", err)
+		if exitState != nil {
+			log.Println("mongod exited before connect", exitState)
+		}
+		return nil, err
+	}
+	err = mongoCli.Cli.Ping(context.TODO(), nil)
+	if err != nil {
+		log.Println("Mongo ping error", err)
+		if exitState != nil {
+			log.Println("mongod exited before connect", exitState)
+			if exitState.ExitCode() == 14 {
+
+			}
+		}
 		return nil, err
 	}
 
@@ -196,16 +237,12 @@ func (m *MongoController) collect() (*MongoCandidateReport, error) {
 
 	log.Println("Exiting mongod:", mongod.ShutdownWithTimeout(3*time.Second))
 	return status, nil
-}
-func (m *MongoController) jobArgs(spec *MongoReplSetSpec) []string {
-	var args []string
-
-	return args
 
 }
 func (m *MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan MongoHealthStatus {
 	log.Println("member controller")
 	out := make(chan MongoHealthStatus, 1)
+	var ticker *time.Ticker
 	go func() {
 
 		m.mongo = &util.MongodMgm{
@@ -301,8 +338,25 @@ func (m *MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan 
 				}
 			}
 			log.Println("Done")
-			time.Sleep(50000 * time.Second)
+			ticker = time.NewTicker(5 * time.Second)
+			go func() {
+				for range ticker.C {
+					log.Println("Health status publishing...")
+					if status, err := m.mongoCli.ReplSetGetStatus(); err == nil {
+						stat := MongoHealthStatus{
+							NodeId:   m.cfg.NodeID,
+							NodeName: m.cfg.NodeName,
+							Status:   fmt.Sprintf("%d", status.MyState),
+						}
+						log.Println("Health:", stat)
+						out <- stat
+					}
+
+				}
+			}()
+
 		}
+
 	}()
 	return out
 

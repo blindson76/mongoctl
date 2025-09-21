@@ -22,6 +22,9 @@ type CandidateReportType[C any] interface {
 	Orderable[C]
 	Unique[C]
 }
+type ReplicaSetSpecType[S any] interface {
+	GetMembers() []string
+}
 type HealtStatusType[H any] interface {
 	Orderable[H]
 	Unique[H]

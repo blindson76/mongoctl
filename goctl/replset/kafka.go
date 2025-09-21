@@ -8,10 +8,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -43,6 +41,10 @@ type KafkaReplSetSpec struct {
 	BootstrapServersStorage string
 	ClusterID               string
 	Members                 []string
+}
+
+func (k KafkaReplSetSpec) GetMembers() []string {
+	return k.Members
 }
 
 type KafkaHealthStatus struct {
@@ -95,7 +97,7 @@ type KafkaController struct {
 	healthChan chan KafkaHealthStatus
 }
 
-func NewKafkaController(cfg KafkaConfig, jobFile string, str store.Provider[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]) *KafkaController {
+func NewKafkaController(cfg KafkaConfig, nomadAddr, jobFile string, str store.Provider[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]) *KafkaController {
 	mc := &KafkaController{
 		cfg: cfg,
 	}
@@ -103,6 +105,7 @@ func NewKafkaController(cfg KafkaConfig, jobFile string, str store.Provider[Kafk
 		collector: mc,
 		store:     str,
 		jobFile:   jobFile,
+		nomadAddr: nomadAddr,
 	}
 	return mc
 }
@@ -125,31 +128,24 @@ func (k KafkaController) collect() (*KafkaCandidateReport, error) {
 		NodeID:         k.cfg.NodeID,
 		NodeName:       k.cfg.NodeName,
 	}
-	finfo, err := os.Stat(k.cfg.DatDir)
+	fInfo, err := os.Stat(k.cfg.DatDir)
 	if err == nil {
-		report.MTime = finfo.ModTime().String()
+		report.MTime = fInfo.ModTime().String()
 	}
 	return report, nil
 
 }
-func (k KafkaController) jobArgs(spec *KafkaReplSetSpec) []string {
 
-	return []string{
-		fmt.Sprintf("replica-count=%d", len(spec.Members)),
-		fmt.Sprintf("replica-members=\"%s\"", strings.Join(spec.Members, ",")),
-	}
-
-}
-func (k KafkaController) generateReplConfig(cs []KafkaCandidateReport) *KafkaReplSetSpec {
-	bootstrapServers := []string{}
-	bootstrapServersStorage := []string{}
-	members := []string{}
+func (k KafkaController) generateReplConfig(cs []KafkaCandidateReport) KafkaReplSetSpec {
+	var bootstrapServers []string
+	var bootstrapServersStorage []string
+	var members []string
 	for _, m := range cs {
 		bootstrapServers = append(bootstrapServers, fmt.Sprintf("%s:%s", m.ControllerAddr, m.ControllerPort))
 		bootstrapServersStorage = append(bootstrapServersStorage, fmt.Sprintf("%s@%s:%s:%s", m.NodeID, m.ControllerAddr, m.ControllerPort, m.StorageID))
 		members = append(members, m.NodeName)
 	}
-	return &KafkaReplSetSpec{
+	return KafkaReplSetSpec{
 		BootstrapServers:        strings.Join(bootstrapServers, ","),
 		BootstrapServersStorage: strings.Join(bootstrapServersStorage, ","),
 		ClusterID:               k.cfg.ClusterID,
@@ -269,11 +265,7 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 
 	// graceful shutdown
 	sigs := make(chan os.Signal, 1)
-	if runtime.GOOS == "windows" {
-		signal.Notify(sigs, os.Interrupt)
-	} else {
-		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-	}
+	signal.Notify(sigs, os.Interrupt)
 
 	go func() {
 		sig := <-sigs
@@ -346,20 +338,6 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 }
 
 var (
-	// Controller-only (dinamik quorum)
-	controllerTpl = strings.TrimSpace(`
-node.id={{.ID}}
-process.roles=controller
-
-listeners=CONTROLLER://{{.ControllerAddr}}
-advertised.listeners=CONTROLLER://{{.ControllerAddr}}
-controller.listener.names=CONTROLLER
-listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-
-controller.quorum.bootstrap.servers={{.BootstrapServers}}
-
-metadata.log.dir={{.MetaLogDir}}
-`)
 
 	// Combined mode (broker + controller)
 	combinedTpl = strings.TrimSpace(`

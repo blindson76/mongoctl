@@ -1,6 +1,7 @@
 package replset
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"slices"
@@ -14,9 +15,8 @@ import (
 type ReplicaSetStatus int
 type controllerInterface[C, S, H any] interface {
 	collect() (*C, error)
-	generateReplConfig([]C) *S
+	generateReplConfig([]C) S
 	memberTask(<-chan S) <-chan H
-	jobArgs(*S) []string
 }
 
 const (
@@ -35,9 +35,9 @@ type ReplicaController interface {
 
 // replicaSetControl definition remains unchanged
 type replicaSetControl[
-C store.CandidateReportType[C],
-S any,
-H store.HealtStatusType[H],
+	C store.CandidateReportType[C],
+	S store.ReplicaSetSpecType[S],
+	H store.HealtStatusType[H],
 ] struct {
 	ReplicaController
 	collector  controllerInterface[C, S, H]
@@ -48,6 +48,7 @@ H store.HealtStatusType[H],
 	timer      *time.Timer
 	candidates []C
 	jobFile    string
+	nomadAddr  string
 }
 
 func (rs *replicaSetControl[
@@ -102,6 +103,7 @@ func (rs *replicaSetControl[
 	log.Println(candidates)
 	numOfCandidates := len(candidates)
 	rs.candidates = candidates
+	candidates[0].GetId()
 	if rs.state == INITIATION {
 		if numOfCandidates == 6 {
 			log.Println("initiation done with full members")
@@ -154,14 +156,18 @@ func (rs *replicaSetControl[C, S, H]) handleTimer(t time.Time) {
 
 	}
 }
-func (rs *replicaSetControl[C, S, H]) publishReplSpec(spec *S) error {
+func (rs *replicaSetControl[C, S, H]) publishReplSpec(spec S) error {
 
 	log.Println("Publishing new replset configuration")
-	err := rs.store.UpdateReplSetConfig(spec)
+	err := rs.store.UpdateReplSetConfig(&spec)
 	if err != nil {
 		return err
 	}
-	vars := rs.collector.jobArgs(spec)
+	members := spec.GetMembers()
+	vars := []string{
+		fmt.Sprintf("replica-count=%d", len(members)),
+		fmt.Sprintf("replica-members=\"%s\"", strings.Join(members, ",")),
+	}
 	log.Println("vars", vars)
 
 	client, err := napi.NewClient(&napi.Config{

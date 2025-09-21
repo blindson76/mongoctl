@@ -56,4 +56,5 @@ type ReplSetStatus struct {
 	Set     string  `bson:"set"`
 	Term    int64   `bson:"term"`
 	Optimes Optimes `bson:"optimes"`
+	MyState int     `bson:"myState"`
 }
