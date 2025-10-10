@@ -1,7 +1,6 @@
 package replset
 
 import (
-	"example.com/goctl/util"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"example.com/goctl/util"
 )
 
 func (m *MongoController) ParseMembers(membersStr string) map[int]util.Member {
@@ -47,7 +48,7 @@ func (m *MongoController) wipeDB() error {
 	return nil
 }
 func (m *MongoController) checkWipeRequirment(replConfig MongoReplSetSpec, memberCfg *util.MongoStatus) bool {
-	log.Println("Checking wipee requirments")
+	log.Println("Checking wipe requirments")
 	log.Println("replcfg", replConfig)
 	log.Println("memberCfg", memberCfg)
 	if memberCfg.ReplSetName == "" {

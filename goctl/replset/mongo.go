@@ -135,16 +135,22 @@ func (m *MongoController) generateReplConfig(candidates []MongoCandidateReport) 
 	return mongoCfg
 }
 func (m *MongoController) collect() (*MongoCandidateReport, error) {
-	report, err := m.getOfflineStatus()
-	if err != nil {
-		log.Println("get offlinestatus err", err)
-		log.Println("trying wipe db")
-		if err := m.wipeDB(); err != nil {
-			log.Println("wipe error", err)
+	for i := 0; i < 2; i++ {
+		log.Println("try attempt:", i+1)
+		report, err := m.getOfflineStatus()
+		if err == nil {
+			return report, nil
 		}
-		return m.getOfflineStatus()
+		time.Sleep(2 * time.Second)
 	}
-	return report, err
+
+	log.Println("get offlinestatus err")
+
+	log.Println("trying wipe db")
+	if err := m.wipeDB(); err != nil {
+		log.Println("wipe error", err)
+	}
+	return m.getOfflineStatus()
 }
 func (m *MongoController) getOfflineStatus() (*MongoCandidateReport, error) {
 
@@ -240,9 +246,13 @@ func (m *MongoController) getOfflineStatus() (*MongoCandidateReport, error) {
 
 }
 func (m *MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan MongoHealthStatus {
-	log.Println("member controller")
+	log.Println("member controller", "PID:", os.Getpid())
 	out := make(chan MongoHealthStatus, 1)
 	var ticker *time.Ticker
+	exitChan := make(chan *os.ProcessState)
+	defer func() {
+		log.Println("kill mongod here")
+	}()
 	go func() {
 
 		m.mongo = &util.MongodMgm{
@@ -254,6 +264,7 @@ func (m *MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan 
 			KeyFile:  m.cfg.KeyFile,
 			OnExit: func(state *os.ProcessState) {
 				log.Println("Mongod exited", state)
+				exitChan <- state
 			},
 		}
 		if err := m.mongo.Start(); err != nil {
@@ -272,89 +283,99 @@ func (m *MongoController) memberTask(configChan <-chan MongoReplSetSpec) <-chan 
 		}
 		if m.mongoCli.Cli.Ping(context.TODO(), nil) != nil {
 			log.Panicln("Ping error", err)
+		} else {
+			log.Println("Ping OK. Connected to mongod")
 		}
+
+		ticker = time.NewTicker(3 * time.Second)
+		go func() {
+			for range ticker.C {
+				log.Println("Health status publishing...")
+				if status, err := m.mongoCli.ReplSetGetStatus(); err == nil && status != nil {
+					stat := MongoHealthStatus{
+						NodeId:   m.cfg.NodeID,
+						NodeName: m.cfg.NodeName,
+						Status:   fmt.Sprintf("%s", status.MyState),
+					}
+					log.Println("Health:", stat)
+					out <- stat
+				}
+
+			}
+		}()
 		time.Sleep(5 * time.Second)
-		for mongoConfigItem := range configChan {
-			mongoConfig := mongoConfigItem
-			isPrimary := mongoConfig.Primary == m.cfg.NodeName
 
-			memberStatus, err := m.GetMemberStatus()
-			if err != nil {
-				log.Println("fetc mongostatus error", err)
-				switch e := err.(type) {
-				case mongo.CommandError:
-					if e.Name == "InvalidReplicaSetConfig" && isPrimary {
-						log.Println("stale cfg. try reconfigure")
+		for {
+			select {
+			case exitStatus := <-exitChan:
+				log.Panicln("mongod exited", exitStatus)
+			case mongoConfigItem := <-configChan:
 
-						desiredMember := m.ParseMembers(mongoConfig.Members)
-						cfg, err := m.mongoCli.ReplSetGetConfig()
-						newMembers := []util.Member{}
-						for _, m := range desiredMember {
-							newMembers = append(newMembers, m)
-						}
-						cfg.Config.Members = newMembers
-						err = m.mongoCli.ReplSetReconfig(&cfg.Config)
+				mongoConfig := mongoConfigItem
+				log.Println("fetch new mongoconfig", mongoConfigItem)
+				isPrimary := mongoConfig.Primary == m.cfg.NodeName
 
-						log.Println("reconf", err)
-						if err != nil {
-							time.Sleep(3 * time.Second)
-							log.Println("stale conf recovery done")
-							continue
-						}
-					}
-				}
-			}
-			log.Println("mongoConfig", mongoConfig, "memberStatus", memberStatus)
-
-			//stop if mongod running
-			if !isPrimary && m.checkWipeRequirment(mongoConfig, memberStatus) {
-				log.Println("Stopping mongod to wipe")
-				pState := m.mongo.ShutdownWithTimeout(10 * time.Second)
-				log.Println("mongo exited?", pState)
-				if err := m.wipeDB(); err != nil {
-					panic(err)
-
-				}
-				if err := m.mongo.Start(); err != nil {
-					log.Panicln("Mongo start error", err)
-				}
-				m.mongoCli = m.mongo.Client()
-				err := m.mongoCli.ConnectWithOptions(func(opts *options.ClientOptions) *options.ClientOptions {
-					return opts.SetDirect(true).SetAuth(options.Credential{
-						Username: "admin",
-						Password: "123",
-					}).SetReplicaSet("")
-
-				})
+				memberStatus, err := m.GetMemberStatus()
 				if err != nil {
-					log.Panicln("Mongo client connect error", err)
-				}
-			}
-			//start if mongo not running
-			log.Println(isPrimary, mongoConfig.Primary, memberStatus.NodeName)
-			if isPrimary {
-				if err := m.configPrimary(mongoConfig, memberStatus); err != nil {
-					log.Println("Primary configuration error", err)
-				}
-			}
-			log.Println("Done")
-			ticker = time.NewTicker(5 * time.Second)
-			go func() {
-				for range ticker.C {
-					log.Println("Health status publishing...")
-					if status, err := m.mongoCli.ReplSetGetStatus(); err == nil {
-						stat := MongoHealthStatus{
-							NodeId:   m.cfg.NodeID,
-							NodeName: m.cfg.NodeName,
-							Status:   fmt.Sprintf("%d", status.MyState),
+					log.Println("fetc mongostatus error", err)
+					switch e := err.(type) {
+					case mongo.CommandError:
+						if e.Name == "InvalidReplicaSetConfig" && isPrimary {
+							log.Println("stale cfg. try reconfigure")
+
+							desiredMember := m.ParseMembers(mongoConfig.Members)
+							cfg, err := m.mongoCli.ReplSetGetConfig()
+							newMembers := []util.Member{}
+							for _, m := range desiredMember {
+								newMembers = append(newMembers, m)
+							}
+							cfg.Config.Members = newMembers
+							err = m.mongoCli.ReplSetReconfig(&cfg.Config)
+
+							log.Println("reconf", err)
+							if err != nil {
+								time.Sleep(3 * time.Second)
+								log.Println("stale conf recovery done")
+								continue
+							}
 						}
-						log.Println("Health:", stat)
-						out <- stat
 					}
-
 				}
-			}()
+				log.Println("mongoConfig", mongoConfig, "memberStatus", memberStatus)
 
+				//stop if mongod running
+				if !isPrimary && m.checkWipeRequirment(mongoConfig, memberStatus) {
+					log.Println("Stopping mongod to wipe")
+					pState := m.mongo.ShutdownWithTimeout(10 * time.Second)
+					log.Println("mongo exited?", pState)
+					if err := m.wipeDB(); err != nil {
+						panic(err)
+
+					}
+					if err := m.mongo.Start(); err != nil {
+						log.Panicln("Mongo start error", err)
+					}
+					m.mongoCli = m.mongo.Client()
+					err := m.mongoCli.ConnectWithOptions(func(opts *options.ClientOptions) *options.ClientOptions {
+						return opts.SetDirect(true).SetAuth(options.Credential{
+							Username: "admin",
+							Password: "123",
+						}).SetReplicaSet("")
+
+					})
+					if err != nil {
+						log.Panicln("Mongo client connect error", err)
+					}
+				}
+				//start if mongo not running
+				log.Println(isPrimary, mongoConfig.Primary, memberStatus.NodeName)
+				if isPrimary {
+					if err := m.configPrimary(mongoConfig, memberStatus); err != nil {
+						log.Println("Primary configuration error", err)
+					}
+				}
+				log.Println("Done")
+			}
 		}
 
 	}()

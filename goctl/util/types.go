@@ -52,9 +52,50 @@ type Optimes struct {
 	WrittenOpTime             Optime `bson:"writtenOpTime"`
 	DurableOpTime             Optime `bson:"durableOpTime"`
 }
+type MongoStatusEnum int
+
+const (
+	MongoStatus_STARTUP    MongoStatusEnum = 0
+	MongoStatus_PRIMARY    MongoStatusEnum = 1
+	MongoStatus_SECONDARY  MongoStatusEnum = 2
+	MongoStatus_RECOVERING MongoStatusEnum = 3
+	MongoStatus_STARTUP2   MongoStatusEnum = 5
+	MongoStatus_UNKNOWN    MongoStatusEnum = 6
+	MongoStatus_ARBITER    MongoStatusEnum = 7
+	MongoStatus_DOWN       MongoStatusEnum = 8
+	MongoStatus_ROLLBACK   MongoStatusEnum = 9
+	MongoStatus_REMOVED    MongoStatusEnum = 10
+)
+
+func (e MongoStatusEnum) String() string {
+	switch e {
+	case MongoStatus_STARTUP:
+		return "STARTUP"
+	case MongoStatus_PRIMARY:
+		return "PRIMARY"
+	case MongoStatus_SECONDARY:
+		return "SECONDARY"
+	case MongoStatus_RECOVERING:
+		return "RECOVERING"
+	case MongoStatus_STARTUP2:
+		return "STARTUP2"
+	case MongoStatus_UNKNOWN:
+		return "UNKNOWN"
+	case MongoStatus_ARBITER:
+		return "ARBITER"
+	case MongoStatus_DOWN:
+		return "DOWN"
+	case MongoStatus_ROLLBACK:
+		return "ROLLBACK"
+	case MongoStatus_REMOVED:
+		return "REMOVED"
+	}
+	return ""
+}
+
 type ReplSetStatus struct {
-	Set     string  `bson:"set"`
-	Term    int64   `bson:"term"`
-	Optimes Optimes `bson:"optimes"`
-	MyState int     `bson:"myState"`
+	Set     string          `bson:"set"`
+	Term    int64           `bson:"term"`
+	Optimes Optimes         `bson:"optimes"`
+	MyState MongoStatusEnum `bson:"myState"`
 }

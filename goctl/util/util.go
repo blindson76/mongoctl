@@ -162,8 +162,11 @@ func (c *MongoClient) ConnectWithOptions(optFn func(opts *options.ClientOptions)
 		connectOpts.SetReplicaSet(c.replSet)
 	}
 	client, err := mongo.Connect(optFn(connectOpts))
+	if err != nil {
+		return err
+	}
 	c.Cli = client
-	return err
+	return nil
 }
 
 func (c *MongoClient) ReplSetGetStatus() (*ReplSetStatus, error) {

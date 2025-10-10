@@ -154,7 +154,7 @@ func (k KafkaController) generateReplConfig(cs []KafkaCandidateReport) KafkaRepl
 }
 
 func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealthStatus {
-	log.Println("Member task started")
+	log.Println("Member task started", "pid:", os.Getpid())
 	k.healthChan = make(chan KafkaHealthStatus, 1)
 	var exitChan chan *os.ProcessState
 	go func() {
@@ -210,6 +210,7 @@ func (k KafkaController) formatStorage(s KafkaReplSetSpec) error {
 	cmd.Env = env
 
 	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Println("storage out:", string(out))
 		return err
 	} else {
 		log.Println("storage out:", string(out))
@@ -252,10 +253,10 @@ func (k KafkaController) createConfigFile(s KafkaReplSetSpec) (string, error) {
 func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, error) {
 	env := baseEnv()
 	env = append(env, fmt.Sprintf("LOG_DIR=%s", normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "kafka-logs"))))
-	cmd := exec.Command("cmd", "/c", "kafka-server-start.bat", cfgFile)
+	cmd := exec.Command("kafka-server-start.bat", cfgFile)
 	cmd.Env = env
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	exitChan := make(chan *os.ProcessState, 1)
 
@@ -270,8 +271,9 @@ func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, err
 	go func() {
 		sig := <-sigs
 		log.Println("Signal:", sig)
-		_ = cmd.Process.Signal(os.Interrupt)
+		_ = cmd.Process.Signal(os.Kill)
 		time.Sleep(5 * time.Second)
+		log.Println("killing cmd")
 		_ = cmd.Process.Kill()
 		os.Exit(0)
 	}()
@@ -356,6 +358,8 @@ controller.quorum.bootstrap.servers={{.BootstrapServers}}
 log.dirs={{.LogDir}}
 metadata.log.dir={{.MetaLogDir}}
 num.partitions=3
+default.replication.factor=2
+min.insync.replicas=2
 `)
 )
 
@@ -368,8 +372,6 @@ func baseEnv() []string {
 	return append(os.Environ(),
 		fmt.Sprintf("PATH=%s", strings.Join([]string{
 			os.Getenv("PATH"),
-			"D:\\kafka\\bin\\windows",
-			"C:\\Users\\ubozkurt\\Downloads\\jdk-24_windows-x64_bin\\jdk-24.0.1\\bin",
 		}, ";")),
 		"CLASSPATH=",
 	)

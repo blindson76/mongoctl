@@ -25,8 +25,10 @@ set "BASE=%~dp0"
 set "CMS_ROOT=%BASE%"
 set "COTS_DIR=%BASE%cots"
 set "MONGO_TOOLS=%BASE%cots\mongo"
+set "KAFKA_TOOLS=%BASE%cots\kafka\bin\windows"
 set "TARGET_DIR=%BASE%target"
 set "LOG_DIR=%BASE%logs"
+set "JAVA_HOME=%COTS_DIR%\jdk-24.0.1"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 rem =========================
@@ -42,9 +44,12 @@ echo This is node %CONSOLE_ID% (IP %CSB_IP%)
 rem =========================
 rem PATH
 rem =========================
+
 set "PATH=%BASE%;%PATH%"
 set "PATH=%COTS_DIR%;%PATH%"
 set "PATH=%MONGO_TOOLS%;%PATH%"
+set "PATH=%KAFKA_TOOLS%;%PATH%"
+set "PATH=%JAVA_HOME%\bin;%PATH%"
 
 rem =========================
 rem Data directories
@@ -112,7 +117,7 @@ rem =========================
 rem Start Nomad (server+client)
 rem =========================
 echo Starting Nomad...
-start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config %BASE%client.hcl -config %BASE%server.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface loop -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:14648 -retry-join 10.10.52.1:14648 -retry-join 10.10.53.1:14648 -retry-join 10.10.54.1:14648 -retry-join 10.10.55.1:14648 -retry-join 10.10.56.1:14648
+start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config %BASE%client.hcl -config %BASE%server.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface ab -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:14648 -retry-join 10.10.52.1:14648 -retry-join 10.10.53.1:14648 -retry-join 10.10.54.1:14648 -retry-join 10.10.55.1:14648 -retry-join 10.10.56.1:14648
 
 rem =========================
 rem Wait Nomad ready (custom script)

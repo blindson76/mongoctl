@@ -102,6 +102,9 @@ func (rs *replicaSetControl[
 	H]) handleCandidates(candidates []C) {
 	log.Println(candidates)
 	numOfCandidates := len(candidates)
+	if numOfCandidates == 0 {
+		return
+	}
 	rs.candidates = candidates
 	candidates[0].GetId()
 	if rs.state == INITIATION {
@@ -115,7 +118,7 @@ func (rs *replicaSetControl[
 			rs.state = CONFIGURATION
 		} else if numOfCandidates > 0 {
 			//This is worst case. we have members to initiate replicaset
-			rs.timer = time.NewTimer(10 * time.Second)
+			rs.timer = time.NewTimer(15 * time.Second)
 			rs.state = CONFIGURATION
 			log.Println("")
 		}
@@ -145,7 +148,11 @@ func (rs *replicaSetControl[C, S, H]) handleTimer(t time.Time) {
 	} else if rs.state == CONFIGURATION {
 		log.Println("here we publish initial configuration")
 		sortCandidates(rs.candidates)
-		replCfg := rs.collector.generateReplConfig(rs.candidates)
+		length := 3
+		if len(rs.candidates) < 3 {
+			length = len(rs.candidates)
+		}
+		replCfg := rs.collector.generateReplConfig(rs.candidates[0:length])
 		err := rs.publishReplSpec(replCfg)
 		if err != nil {
 			log.Println("Error publishing repl spec:", err)
