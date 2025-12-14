@@ -1,6 +1,7 @@
 package replset
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -8,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"example.com/goctl/store"
+	"example.com/goctl/internal/store"
 	napi "github.com/hashicorp/nomad/api"
+	"github.com/qmuntal/stateless"
 )
 
 type ReplicaSetStatus int
@@ -40,15 +42,17 @@ type replicaSetControl[
 	H store.HealtStatusType[H],
 ] struct {
 	ReplicaController
-	collector  controllerInterface[C, S, H]
-	name       string
-	store      store.Provider[C, S, H]
-	ch         chan string
-	state      ReplicaSetStatus
-	timer      *time.Timer
-	candidates []C
-	jobFile    string
-	nomadAddr  string
+	collector   controllerInterface[C, S, H]
+	name        string
+	store       store.Provider[C, S, H]
+	ch          chan string
+	state       ReplicaSetStatus
+	timer       *time.Timer
+	candidates  []C
+	lastMembers []C
+	lastSpec    *S
+	jobFile     string
+	nomadAddr   string
 }
 
 func (rs *replicaSetControl[
@@ -72,17 +76,102 @@ func (rs *replicaSetControl[
 	S,
 	H]) ControllerTask(jobFile string) {
 	rs.jobFile = jobFile
+
+	replCtrl := stateless.NewStateMachine(stateInit)
+
+	replCtrl.Configure(stateInit).
+		Permit(trigerStart, stateConfiguration)
+
+	replCtrl.Configure(stateConfiguration).
+		OnEntry(func(ctx context.Context, args ...any) error {
+			if rs.timer != nil {
+				rs.timer.Stop()
+				rs.timer = nil
+			}
+			if len(args) == 0 {
+				return nil
+			}
+			log.Println("config", args)
+			candidates, ok := args[0].([]C)
+			if !ok {
+				rs.candidates = candidates
+			}
+			log.Println(candidates)
+			numOfCandidates := len(candidates)
+			if numOfCandidates == 0 {
+				return nil
+			}
+			if numOfCandidates == 6 {
+				log.Println("initiation done with full members")
+				rs.timer = time.AfterFunc(time.Second*1, func() {
+					replCtrl.FireCtx(context.Background(), triggerInitialConfiguration, candidates)
+				})
+			} else if numOfCandidates >= 3 {
+				log.Println("wait a while to others")
+				rs.timer = time.AfterFunc(time.Second*5, func() {
+					replCtrl.FireCtx(context.Background(), triggerInitialConfiguration, candidates)
+				})
+			} else if numOfCandidates > 0 {
+				log.Println("wait 15s for just one member")
+				//This is worst case
+				rs.timer = time.AfterFunc(time.Second*15, func() {
+					replCtrl.FireCtx(context.Background(), triggerInitialConfiguration, candidates)
+				})
+			}
+
+			return nil
+		}).
+		Permit(triggerInitialConfiguration, stateMonitoring).
+		PermitReentry(triggerCandidateReport)
+
+	replCtrl.Configure(stateMonitoring).
+		OnEntryFrom(triggerInitialConfiguration, func(ctx context.Context, args ...any) error {
+			candidates := args[0].([]C)
+			log.Println("deploying initial configuration", candidates)
+			sortCandidates(candidates)
+			length := 3
+			if len(candidates) < 3 {
+				length = len(rs.candidates)
+			}
+			replCfg := rs.collector.generateReplConfig(candidates[0:length])
+			err := rs.publishReplSpec(replCfg)
+			if err != nil {
+				log.Println("Error publishing repl spec:", err)
+				return err
+			}
+			rs.lastMembers = candidates[0:length]
+			// save last spec and move to monitor state
+			rs.lastSpec = &replCfg
+			return nil
+		}).
+		OnEntryFrom(triggerCandidateReport, func(ctx context.Context, args ...any) error {
+
+			log.Println("candi report", args)
+			return nil
+		}).
+		OnEntryFrom(triggerMemberStatus, func(ctx context.Context, args ...any) error {
+			log.Println("health status", args)
+			return nil
+		}).
+		PermitReentry(triggerMemberStatus).
+		PermitReentry(triggerCandidateReport)
+
+	replCtrl.ActivateCtx(context.Background())
+
+	replCtrl.FireCtx(context.Background(), trigerStart)
+
 	rs.timer = time.NewTimer(5 * time.Minute)
 	candidatesChan := rs.store.WatchCandidateReports()
 	healthStatusChan := rs.store.WatchHealthStatus()
 	for {
 		select {
 		case candidateReports := <-candidatesChan:
-			rs.handleCandidates(candidateReports)
+			log.Println("candi rep", candidateReports)
+			replCtrl.FireCtx(context.Background(), triggerCandidateReport, candidateReports)
+			log.Println("End")
 		case healthStatus := <-healthStatusChan:
-			rs.handleHealthStatus(healthStatus)
-		case t := <-rs.timer.C:
-			rs.handleTimer(t)
+			log.Println("health status", healthStatus)
+			replCtrl.Fire(context.Background(), triggerMemberStatus, healthStatus)
 		}
 	}
 }
@@ -130,7 +219,8 @@ func (rs *replicaSetControl[
 			rs.state = INITIATION
 		}
 	} else if rs.state == MONITOR {
-		log.Println("Monitor state. wil be implemented")
+		// Candidate list updated while monitoring; nothing else to do here
+		log.Println("Monitor: candidate list updated")
 	}
 }
 
@@ -139,7 +229,7 @@ func (rs *replicaSetControl[
 	S,
 	H,
 ]) handleHealthStatus(healthStatus []H) {
-	log.Println(healthStatus)
+	log.Println("healthStatus", healthStatus)
 }
 func (rs *replicaSetControl[C, S, H]) handleTimer(t time.Time) {
 	log.Println("timer", t)
@@ -158,6 +248,10 @@ func (rs *replicaSetControl[C, S, H]) handleTimer(t time.Time) {
 			log.Println("Error publishing repl spec:", err)
 			return
 		}
+		rs.lastMembers = rs.candidates[0:length]
+		// save last spec and move to monitor state
+		rs.lastSpec = &replCfg
+		rs.state = MONITOR
 
 		//rs.
 

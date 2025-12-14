@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"example.com/goctl/util"
+	"example.com/goctl/internal/util"
 )
 
 func (m *MongoController) ParseMembers(membersStr string) map[int]util.Member {

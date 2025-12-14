@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"example.com/goctl/store"
-	"example.com/goctl/util"
+	"example.com/goctl/internal/store"
+	"example.com/goctl/internal/util"
 	"github.com/spf13/viper"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -48,6 +48,7 @@ func NewMongoController(mongoCfg MongoConfig, nomadAddr, jobFile string, str sto
 	mc.replicaSetControl = replicaSetControl[MongoCandidateReport, MongoReplSetSpec, MongoHealthStatus]{
 		collector: mc,
 		store:     str,
+		name:      "mongo",
 		nomadAddr: nomadAddr,
 		jobFile:   jobFile,
 	}
@@ -75,8 +76,7 @@ type MongoHealthStatus struct {
 }
 
 func (m MongoHealthStatus) Less(o MongoHealthStatus) bool {
-	//TODO implement me
-	return false
+	return m.NodeName < o.NodeName
 }
 
 func (m MongoHealthStatus) GetId() string {
@@ -84,7 +84,12 @@ func (m MongoHealthStatus) GetId() string {
 }
 
 func (m MongoHealthStatus) IsHealthy() bool {
-	return true
+	// Treat PRIMARY, SECONDARY and ARBITER as healthy states
+	switch m.Status {
+	case "PRIMARY", "SECONDARY", "ARBITER":
+		return true
+	}
+	return false
 }
 
 type MongoReplSetSpec struct {

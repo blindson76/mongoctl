@@ -14,7 +14,7 @@ import (
 
 	"github.com/segmentio/kafka-go"
 
-	"example.com/goctl/store"
+	"example.com/goctl/internal/store"
 )
 
 type KafkaCandidateReport struct {
@@ -64,8 +64,7 @@ func (k KafkaHealthStatus) GetId() string {
 }
 
 func (k KafkaHealthStatus) IsHealthy() bool {
-	//TODO implement me
-	return true
+	return strings.ToUpper(k.Status) == "OK"
 }
 
 type ServerProperties struct {
@@ -103,6 +102,7 @@ func NewKafkaController(cfg KafkaConfig, nomadAddr, jobFile string, str store.Pr
 	}
 	mc.replicaSetControl = replicaSetControl[KafkaCandidateReport, KafkaReplSetSpec, KafkaHealthStatus]{
 		collector: mc,
+		name:      "kafka",
 		store:     str,
 		jobFile:   jobFile,
 		nomadAddr: nomadAddr,

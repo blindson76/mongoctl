@@ -5,6 +5,7 @@ go 1.24.6
 require (
 	github.com/hashicorp/consul/api v1.32.1
 	github.com/hashicorp/nomad/api v0.0.0-20250919063558-6ea57a589d80
+	github.com/qmuntal/stateless v1.7.2
 	github.com/segmentio/kafka-go v0.4.49
 	github.com/spf13/viper v1.20.1
 	go.mongodb.org/mongo-driver/v2 v2.3.0

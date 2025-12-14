@@ -117,7 +117,7 @@ rem =========================
 rem Start Nomad (server+client)
 rem =========================
 echo Starting Nomad...
-start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config %BASE%client.hcl -config %BASE%server.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR% -network-interface ab -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:14648 -retry-join 10.10.52.1:14648 -retry-join 10.10.53.1:14648 -retry-join 10.10.54.1:14648 -retry-join 10.10.55.1:14648 -retry-join 10.10.56.1:14648
+start "nomad-%CONSOLE_ID%" /min cmd /c nomad agent -server -config %BASE%client.hcl -config %BASE%server.hcl -bind %CSB_IP% -consul-address %CSB_IP%:8500 -data-dir %NOMAD_DATA_DIR%  -node %NODE_NAME% -bootstrap-expect 3 -retry-join 10.10.51.1:14648 -retry-join 10.10.52.1:14648 -retry-join 10.10.53.1:14648 -retry-join 10.10.54.1:14648 -retry-join 10.10.55.1:14648 -retry-join 10.10.56.1:14648
 
 rem =========================
 rem Wait Nomad ready (custom script)
@@ -154,13 +154,13 @@ rem =========================
 rem Prestart (Go helper)
 rem =========================
 echo Running prestart (Go)...
-go run -C "%BASE%goctl" . -type mongo -task prestart 1>"%LOG_DIR%\prestart-%NODE_ID%.log" 2>&1
+go run -C "%BASE%goctl" ./cmd/goctl -type mongo -task prestart 1>"%LOG_DIR%\prestart-%NODE_ID%.log" 2>&1
 if errorlevel 1 (
   echo WARNING: go prestart exited with errors. See "%LOG_DIR%\prestart-%NODE_ID%.log"
 ) else (
   echo Prestart OK. Logs: "%LOG_DIR%\prestart-%NODE_ID%.log"
 )
-go run -C "%BASE%goctl" . -type kafka -task prestart 1>"%LOG_DIR%\kafka-prestart-%NODE_ID%.log" 2>&1
+go run -C "%BASE%goctl" ./cmd/goctl -type kafka -task prestart 1>"%LOG_DIR%\kafka-prestart-%NODE_ID%.log" 2>&1
 if errorlevel 1 (
   echo WARNING: go kafka-prestart exited with errors. See "%LOG_DIR%\kafka-prestart-%NODE_ID%.log"
 ) else (
