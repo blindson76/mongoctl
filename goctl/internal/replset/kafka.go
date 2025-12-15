@@ -1,18 +1,12 @@
 package replset
 
 import (
+	"context"
 	"fmt"
-	"html/template"
 	"log"
 	"os"
-	"os/exec"
-	"os/signal"
-	"path/filepath"
 	"slices"
 	"strings"
-	"time"
-
-	"github.com/segmentio/kafka-go"
 
 	"example.com/goctl/internal/store"
 )
@@ -157,222 +151,26 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 	log.Println("Member task started", "pid:", os.Getpid())
 	k.healthChan = make(chan KafkaHealthStatus, 1)
 	var exitChan chan *os.ProcessState
+	sm := NewKafkaSM(context.Background(), k)
 	go func() {
 		defer close(k.healthChan)
+		log.Println("waiting event")
+		spec := <-s
+		log.Println("Read new replset config", spec)
+		inReplset := slices.Contains(spec.Members, k.cfg.NodeName)
+		if inReplset {
+			sm.FireStart(spec)
+		}
 		for {
-			log.Println("waiting event")
 			select {
-			case spec := <-s:
-
-				log.Println("Read new replset config", spec)
-				inReplset := slices.Contains(spec.Members, k.cfg.NodeName)
-				if inReplset && k.state == KafkaInitial {
-					log.Println("Joining to replicaset")
-					cfgFile, err := k.createConfigFile(spec)
-					if err != nil {
-						log.Println("create config file error:", err)
-						continue
-					}
-					if err := k.formatStorage(spec); err != nil {
-						log.Println("Format storage error", err)
-						continue
-					}
-					log.Println("Starting kafka-server")
-
-					if ch, err := k.startServer(cfgFile); err != nil {
-						log.Println("Server start error", err)
-						continue
-					} else {
-						exitChan = ch
-						k.state = KafkaStartup
-					}
-
-				} else if !inReplset && k.state != KafkaInitial {
-					log.Panicln("removing from replicaset")
-				}
 			case exitState := <-exitChan:
 				log.Println("Kafka exited", exitState)
+				sm.FireExit(exitState)
 				break
 			}
 
 		}
+		log.Println("exiting member task")
 	}()
 	return k.healthChan
-}
-func (k KafkaController) formatStorage(s KafkaReplSetSpec) error {
-	cfgFile := normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "server.properties"))
-	env := baseEnv()
-	env = append(env, fmt.Sprintf("LOG_DIR=%s", normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "kafka-logs"))))
-	args := []string{"/c", "kafka-storage.bat", "format", "-t", s.ClusterID, "-c", cfgFile, "--initial-controllers", s.BootstrapServersStorage}
-	log.Println("Runnig kafka-storage.bat with:", args)
-
-	cmd := exec.Command("cmd", args...)
-	cmd.Env = env
-
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Println("storage out:", string(out))
-		return err
-	} else {
-		log.Println("storage out:", string(out))
-	}
-	log.Println("proc state:", cmd.ProcessState)
-	return nil
-
-}
-func (k KafkaController) createConfigFile(s KafkaReplSetSpec) (string, error) {
-	alloc := normalize(os.Getenv("NOMAD_ALLOC_DIR"))
-	cfgFile := normalize(filepath.Join(alloc, "server.properties"))
-
-	props := &ServerProperties{
-		ID:               k.cfg.NodeID,
-		ControllerAddr:   fmt.Sprintf("%s:%s", k.cfg.ControllerAddr, k.cfg.ControllerPort),
-		BrokerAddr:       fmt.Sprintf("%s:%s", k.cfg.BrokerAddr, k.cfg.BrokerPort),
-		MetaLogDir:       normalize(k.cfg.MetaDir),
-		LogDir:           normalize(k.cfg.DatDir),
-		BootstrapServers: s.BootstrapServers,
-	}
-
-	tplStr := combinedTpl
-	tpl := template.Must(template.New("kafka").Parse(tplStr))
-
-	if err := os.MkdirAll(filepath.Dir(cfgFile), 0755); err != nil {
-		return "", err
-	}
-	log.Println("Creating cfg file:", cfgFile)
-	fs, err := os.OpenFile(cfgFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return "", err
-	}
-	if err := tpl.Execute(fs, props); err != nil {
-		return "", err
-	}
-	_ = fs.Close()
-	log.Println("Wrote configuration:", cfgFile)
-	return cfgFile, nil
-}
-func (k KafkaController) startServer(cfgFile string) (chan *os.ProcessState, error) {
-	env := baseEnv()
-	env = append(env, fmt.Sprintf("LOG_DIR=%s", normalize(filepath.Join(os.Getenv("NOMAD_ALLOC_DIR"), "kafka-logs"))))
-	cmd := exec.Command("kafka-server-start.bat", cfgFile)
-	cmd.Env = env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	exitChan := make(chan *os.ProcessState, 1)
-
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	// graceful shutdown
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt)
-
-	go func() {
-		sig := <-sigs
-		log.Println("Signal:", sig)
-		_ = cmd.Process.Signal(os.Kill)
-		time.Sleep(5 * time.Second)
-		log.Println("killing cmd")
-		_ = cmd.Process.Kill()
-		os.Exit(0)
-	}()
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Println("kafka exited with error", cmd.ProcessState)
-		}
-		log.Println("Kafka exited", cmd.ProcessState)
-		exitChan <- cmd.ProcessState
-	}()
-
-	go func() {
-		for {
-			log.Println("Connecting kafka")
-			conn, err := kafka.Dial("tcp", fmt.Sprintf("%s:%s", k.cfg.BrokerAddr, k.cfg.BrokerPort))
-			if err != nil {
-				k.healthChan <- KafkaHealthStatus{
-					NodeName: k.cfg.NodeName,
-					NodeId:   k.cfg.NodeID,
-					Status:   "Disconnected",
-				}
-				log.Println("kafka dial error")
-				time.Sleep(3 * time.Second)
-				continue
-			}
-			for {
-
-				if brokers, err := conn.Brokers(); err != nil {
-					log.Println("kafka brokers error")
-					k.healthChan <- KafkaHealthStatus{
-						NodeName: k.cfg.NodeName,
-						NodeId:   k.cfg.NodeID,
-						Status:   "BrokerErr",
-					}
-					time.Sleep(3 * time.Second)
-					break
-				} else {
-					log.Println("Brokers", brokers)
-				}
-				if controller, err := conn.Controller(); err != nil {
-					log.Println("kafka brokers error")
-					k.healthChan <- KafkaHealthStatus{
-						NodeName: k.cfg.NodeName,
-						NodeId:   k.cfg.NodeID,
-						Status:   "ControllerErr",
-					}
-					time.Sleep(3 * time.Second)
-					break
-				} else {
-					log.Println("Controller", controller)
-				}
-				k.healthChan <- KafkaHealthStatus{
-					NodeName: k.cfg.NodeName,
-					NodeId:   k.cfg.NodeID,
-					Status:   "OK",
-				}
-				time.Sleep(5 * time.Second)
-			}
-		}
-	}()
-
-	return exitChan, nil
-
-}
-
-var (
-
-	// Combined mode (broker + controller)
-	combinedTpl = strings.TrimSpace(`
-node.id={{.ID}}
-process.roles=broker,controller
-
-# broker listener (clients buraya bağlanır)
-listeners=PLAINTEXT://{{.BrokerAddr}},CONTROLLER://{{.ControllerAddr}}
-advertised.listeners=PLAINTEXT://{{.BrokerAddr}}
-inter.broker.listener.name=PLAINTEXT
-controller.listener.names=CONTROLLER
-listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-
-controller.quorum.bootstrap.servers={{.BootstrapServers}}
-
-log.dirs={{.LogDir}}
-metadata.log.dir={{.MetaLogDir}}
-num.partitions=3
-default.replication.factor=2
-min.insync.replicas=2
-`)
-)
-
-func normalize(p string) string {
-	// Windows'ta forward slash tercih ediyoruz (Kafka conf için güvenli)
-	clean := filepath.Clean(p)
-	return strings.ReplaceAll(clean, `\`, `/`)
-}
-func baseEnv() []string {
-	return append(os.Environ(),
-		fmt.Sprintf("PATH=%s", strings.Join([]string{
-			os.Getenv("PATH"),
-		}, ";")),
-		"CLASSPATH=",
-	)
 }

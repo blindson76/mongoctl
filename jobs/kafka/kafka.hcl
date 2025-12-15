@@ -28,7 +28,6 @@ job "kafka-job" {
     task "kafka-task" {
 
       env {
-        JAVA_HOME = "C:\\Users\\ubozkurt\\Downloads\\jdk-24_windows-x64_bin\\jdk-24.0.1"
       }
       # service {
       #   name = "kafka"
