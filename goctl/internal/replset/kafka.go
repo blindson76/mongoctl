@@ -170,7 +170,6 @@ func (k KafkaController) memberTask(s <-chan KafkaReplSetSpec) <-chan KafkaHealt
 			}
 
 		}
-		log.Println("exiting member task")
 	}()
 	return k.healthChan
 }

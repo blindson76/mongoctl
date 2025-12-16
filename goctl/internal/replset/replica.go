@@ -272,7 +272,7 @@ func (rs *replicaSetControl[C, S, H]) publishReplSpec(spec S) error {
 	log.Println("vars", vars)
 
 	client, err := napi.NewClient(&napi.Config{
-		Address:  "http://10.10.51.1:14646",
+		Address:  os.Getenv("NOMAD_ADDR"),
 		WaitTime: 5 * time.Second,
 	})
 	if err != nil {

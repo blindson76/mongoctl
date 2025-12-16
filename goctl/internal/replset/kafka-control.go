@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"example.com/goctl/internal/replset/kafkautil"
 	"github.com/qmuntal/stateless"
 	"github.com/segmentio/kafka-go"
 	"golang.org/x/sys/windows"
@@ -66,6 +67,12 @@ func (k *KafkaSM) configure() {
 
 	k.sm.Configure(string(StateFormatting)).
 		OnEntry(func(ctx context.Context, args ...any) error {
+			deleted, err := kafkautil.CleanKRaftDeletedFiles(os.Getenv("KAFKA_META_DIR"))
+			if err != nil {
+				log.Println("Error cleaning deleted files:", err)
+			} else {
+				log.Println("Deleted files:", deleted)
+			}
 			log.Println("stateFormat")
 			s := args[0].(KafkaReplSetSpec)
 			if err := k.formatStorage(s); err != nil {

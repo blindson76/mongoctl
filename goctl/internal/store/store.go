@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -44,6 +45,8 @@ type ConsulStore[C CandidateReportType[C], S any, H HealtStatusType[H]] struct {
 	healthStatusPath    string
 	replSetConfigPath   string
 	cli                 *capi.Client
+	sessionID           string
+	renewStarted        bool
 }
 type ConsulStoreConfig struct {
 	CandidateReportPath string
@@ -56,6 +59,7 @@ func NewConsulStore[C CandidateReportType[C], S any, H HealtStatusType[H]](consu
 		candidateReportPath: config.CandidateReportPath,
 		healthStatusPath:    config.HealthStatusPath,
 		replSetConfigPath:   config.ReplSetConfigPath,
+		renewStarted:        false,
 	}
 	conf := capi.DefaultConfig()
 	conf.Address = consulAddr
@@ -66,7 +70,7 @@ func NewConsulStore[C CandidateReportType[C], S any, H HealtStatusType[H]](consu
 	store.cli = cli
 	return store, err
 }
-func (c ConsulStore[C, S, H]) PutCandidateReport(id string, val *C) error {
+func (c *ConsulStore[C, S, H]) PutCandidateReport(id string, val *C) error {
 	cli := c.cli
 	sess := cli.Session()
 	kv := cli.KV()
@@ -131,7 +135,7 @@ func (c ConsulStore[C, S, H]) PutCandidateReport(id string, val *C) error {
 	return err
 }
 
-func (c ConsulStore[C, S, H]) WatchCandidateReports() <-chan []C {
+func (c *ConsulStore[C, S, H]) WatchCandidateReports() <-chan []C {
 	out := make(chan []C, 1)
 	go func() {
 		kv := c.cli.KV()
@@ -161,17 +165,27 @@ func (c ConsulStore[C, S, H]) WatchCandidateReports() <-chan []C {
 	return out
 }
 
-func (c ConsulStore[C, S, H]) UpdateHealthStatus(id string, status H) error {
+func (c *ConsulStore[C, S, H]) UpdateHealthStatus(id string, status H) error {
+	key := path.Join(c.healthStatusPath, id)
+	if !c.renewStarted {
+		log.Println("publishing first health status")
+		c.StartRenewLoop(context.Background(), 6*time.Second, fmt.Sprintf("health-%s", key))
+		c.renewStarted = true
+	}
 	data, err := json.Marshal(status)
 	if err != nil {
 		return err
 	}
-	key := path.Join(c.healthStatusPath, id)
-	_, err = c.cli.KV().Put(&capi.KVPair{Key: key, Value: data}, nil)
+
+	sid, err := c.ensureSession("10s", fmt.Sprintf("health-%s", key))
+	if err != nil {
+		return err
+	}
+	_, err = c.cli.KV().Put(&capi.KVPair{Key: key, Value: data, Session: sid}, nil)
 	return err
 }
 
-func (c ConsulStore[C, S, H]) WatchHealthStatus() <-chan []H {
+func (c *ConsulStore[C, S, H]) WatchHealthStatus() <-chan []H {
 	out := make(chan []H, 1)
 	go func() {
 		kv := c.cli.KV()
@@ -200,7 +214,7 @@ func (c ConsulStore[C, S, H]) WatchHealthStatus() <-chan []H {
 	return out
 }
 
-func (c ConsulStore[C, S, H]) UpdateReplSetConfig(cfg *S) error {
+func (c *ConsulStore[C, S, H]) UpdateReplSetConfig(cfg *S) error {
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err
@@ -209,7 +223,7 @@ func (c ConsulStore[C, S, H]) UpdateReplSetConfig(cfg *S) error {
 	return err
 }
 
-func (c ConsulStore[C, S, H]) WatchReplSetConfig() <-chan S {
+func (c *ConsulStore[C, S, H]) WatchReplSetConfig() <-chan S {
 	out := make(chan S, 1)
 	go func() {
 		kv := c.cli.KV()
@@ -238,4 +252,59 @@ func (c ConsulStore[C, S, H]) WatchReplSetConfig() <-chan S {
 		}
 	}()
 	return out
+}
+func (c *ConsulStore[C, S, H]) ensureSession(ttl string, name string) (string, error) {
+	log.Println("createses", name)
+	if c.sessionID != "" {
+		return c.sessionID, nil
+	}
+
+	sid, _, err := c.cli.Session().Create(&capi.SessionEntry{
+		TTL:      ttl,                        // e.g. "10s"
+		Behavior: capi.SessionBehaviorDelete, // auto-delete keys tied to this session
+		Name:     name,
+	}, nil)
+	if err != nil {
+		return "", err
+	}
+
+	log.Println("Session created for healt status:", name, sid)
+
+	c.sessionID = sid
+	return sid, nil
+}
+
+func (c *ConsulStore[C, S, H]) StartRenewLoop(ctx context.Context, ttl time.Duration, name string) error {
+	// create session once
+	log.Println("startrenew")
+	_, err := c.ensureSession(fmt.Sprintf("%ds", int(ttl.Seconds())), name)
+	if err != nil {
+		return err
+	}
+
+	// renew every TTL/2
+	every := ttl / 2
+	if every < time.Second {
+		every = time.Second
+	}
+
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return // let it expire => keys auto-delete
+			case <-t.C:
+				_, _, err := c.cli.Session().Renew(c.sessionID, nil)
+				if err != nil {
+					log.Println("session lost")
+					// session lost -> allow recreate later
+					c.sessionID = ""
+					return
+				}
+			}
+		}
+	}()
+	return nil
 }
